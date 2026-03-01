@@ -1,0 +1,42 @@
+discord:
+  # Bot token (use DISCORD_BOT_TOKEN env var instead of hardcoding)
+  token: ""
+
+collector:
+  # 데이터 저장 디렉토리 (기본값: data/conversations, DATA_DIR 환경변수로 오버라이드 가능)
+  data_dir: "data/conversations"
+
+  # Whisper 음성 전사 설정
+  whisper_model: "small"       # tiny | base | small | medium | large-v3
+  whisper_language: "ko"       # 전사 언어 (ko, en, ja, zh ...)
+  whisper_device: "cpu"        # cpu | cuda (GPU 가속)
+  whisper_compute_type: "int8" # int8 | float16 | float32
+
+  # 파이프라인 자동 실행 (!leave 후 자동으로 파이프라인 실행)
+  auto_pipeline: false
+
+  # 봇 파이프라인 실행 모드
+  #   "full" = 분석 → 계획 → 실행 (전체 파이프라인)
+  #   "plan" = 분석 → 계획까지만 (실행 생략, 수동 검토용)
+  pipeline_mode: "full"
+
+  # 음성 채널 필터 (빈 목록 = 모든 채널)
+  monitored_voice_channels: []
+  ignored_voice_channels:
+    - "AFK"
+
+pipeline:
+  data_dir: "data"
+  auto_execute: false  # if true, auto-run Claude Code on new plans
+  dry_run: false
+
+analyzer:
+  model: "claude-sonnet-4-6"
+  min_messages_for_topic: 3  # minimum messages to consider a topic
+
+planner:
+  model: "claude-sonnet-4-6"
+
+executor:
+  claude_cli_path: "claude"  # path to claude CLI binary
+  timeout_seconds: 300

@@ -1,0 +1,210 @@
+"""E2E 테스트: Golang 구구단 시나리오 전체 파이프라인 검증.
+
+transcript → analysis → plan → executor(mock) 전체 흐름을 테스트합니다.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import pytest
+
+import pipeline
+from run_demo import (
+    _mock_call_claude_analyzer,
+    _mock_call_claude_planner,
+    _mock_executor_for_gugudan,
+)
+
+
+@pytest.fixture
+def gugudan_env(tmp_path, monkeypatch):
+    """구구단 E2E 테스트용 환경을 설정합니다.
+
+    디렉토리 구조:
+      tmp_path/
+        data/
+          conversations/
+            2026-03-01_devteam_general.json
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(pipeline, "_DATA_DIR", data_dir)
+    monkeypatch.setattr(pipeline, "_CONFIG_PATH", tmp_path / "no.yaml")
+    monkeypatch.chdir(tmp_path)
+
+    # conversations 디렉토리 및 transcript 생성
+    conv_dir = data_dir / "conversations"
+    conv_dir.mkdir()
+    transcript = conv_dir / "2026-03-01_devteam_general.json"
+    transcript.write_text(json.dumps({
+        "date": "2026-03-01",
+        "channel": "general",
+        "guild": "devteam",
+        "type": "voice_transcription",
+        "session_start": "2026-03-01T10:00:00Z",
+        "session_end": "2026-03-01T10:15:00Z",
+        "messages": [
+            {
+                "author": "김민수",
+                "content": "오늘 간단한 거 하나 만들어보자. Go로 구구단 프로그램 만들어서 신입분들 온보딩 예제로 쓰면 좋겠어.",
+                "timestamp": "2026-03-01T10:01:00Z"
+            },
+            {
+                "author": "이지영",
+                "content": "구구단? 너무 간단하지 않아? 그래도 Go 기초 연습용으로는 괜찮겠다. CLI로 단수 입력받아서 출력하는 거지?",
+                "timestamp": "2026-03-01T10:02:30Z"
+            },
+            {
+                "author": "박준혁",
+                "content": "맞아. main.go 하나에 fmt.Scanf로 입력받고, for 루프로 1부터 9까지 곱해서 출력하면 돼. 간단하게 가자.",
+                "timestamp": "2026-03-01T10:03:45Z"
+            },
+            {
+                "author": "김민수",
+                "content": "좋아. 에러 처리도 넣자. 숫자가 아닌 값 입력하면 안내 메시지 출력하고, 1~9 범위 밖이면 경고해주는 정도.",
+                "timestamp": "2026-03-01T10:05:10Z"
+            },
+            {
+                "author": "이지영",
+                "content": "그럼 정리하면, Go로 구구단 CLI 프로그램 하나 만드는 거. data/result 디렉토리에 프로젝트 폴더 만들어서 진행하자.",
+                "timestamp": "2026-03-01T10:06:20Z"
+            }
+        ]
+    }), encoding="utf-8")
+
+    return tmp_path
+
+
+class TestE2EGugudanPipeline:
+    """구구단 시나리오의 전체 파이프라인을 검증합니다."""
+
+    def test_analysis_extracts_gugudan_topic(self, gugudan_env):
+        """1단계: transcript에서 구구단 토픽이 추출되어야 한다."""
+        from analyzer.analyzer import analyze_conversations
+
+        conv_files = list((gugudan_env / "data" / "conversations").glob("2026-03-01_*.json"))
+        assert len(conv_files) == 1
+
+        with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer):
+            result = analyze_conversations(conv_files, "2026-03-01")
+
+        assert result.dev_topics_found == 1
+        topic = result.dev_topics[0]
+        assert "구구단" in topic.title
+        assert topic.category == "feature"
+        assert topic.actionable is True
+        assert topic.estimated_complexity == "small"
+
+    def test_plan_generation_for_gugudan(self, gugudan_env):
+        """2단계: 분석 결과로부터 구구단 plan이 생성되어야 한다."""
+        from analyzer.analyzer import analyze_conversations
+        from planner.planner import generate_plans
+
+        conv_files = list((gugudan_env / "data" / "conversations").glob("2026-03-01_*.json"))
+
+        with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer):
+            analysis = analyze_conversations(conv_files, "2026-03-01")
+
+        plan_dir = gugudan_env / "data" / "plans"
+        with patch("planner.planner._call_claude", side_effect=_mock_call_claude_planner):
+            plan_files = generate_plans(analysis, plan_dir)
+
+        assert len(plan_files) == 1
+        plan_content = plan_files[0].read_text(encoding="utf-8")
+        assert "Go 구구단" in plan_content
+        assert "## Claude Code Prompt" in plan_content
+        assert "main.go" in plan_content
+
+    def test_executor_creates_go_files(self, gugudan_env):
+        """3단계: executor가 data/result/go-gugudan에 Go 파일을 생성해야 한다."""
+        result = _mock_executor_for_gugudan("")
+
+        assert "Successfully" in result
+
+        # chdir이 gugudan_env(tmp_path)이므로 data/result/go-gugudan은 tmp_path 하위
+        result_dir = gugudan_env / "data" / "result" / "go-gugudan"
+        assert result_dir.exists()
+
+        # main.go 검증
+        main_go = result_dir / "main.go"
+        assert main_go.exists()
+        content = main_go.read_text(encoding="utf-8")
+        assert "package main" in content
+        assert "fmt.Scan" in content
+        assert "1~9" in content
+        assert "for i := 1; i <= 9; i++" in content
+
+        # go.mod 검증
+        go_mod = result_dir / "go.mod"
+        assert go_mod.exists()
+        mod_content = go_mod.read_text(encoding="utf-8")
+        assert "module go-gugudan" in mod_content
+        assert "go 1.21" in mod_content
+
+    def test_full_pipeline_end_to_end(self, gugudan_env):
+        """전체 파이프라인 E2E: transcript → analysis → plan 생성까지."""
+        with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer), \
+             patch("planner.planner._call_claude", side_effect=_mock_call_claude_planner):
+            pipeline.run_pipeline(date="2026-03-01", force=True)
+
+        # analysis 결과 확인 (analyzer는 Path("data/analysis")로 저장, chdir=tmp_path)
+        analysis_path = gugudan_env / "data" / "analysis" / "2026-03-01_analysis.json"
+        assert analysis_path.exists()
+        analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+        assert analysis["dev_topics_found"] == 1
+        assert "구구단" in analysis["dev_topics"][0]["title"]
+
+        # plan 파일 확인 (pipeline._DATA_DIR / "plans")
+        plan_dir = gugudan_env / "data" / "plans"
+        plans = list(plan_dir.glob("2026-03-01_*.md"))
+        assert len(plans) == 1
+        plan_content = plans[0].read_text(encoding="utf-8")
+        assert "## Claude Code Prompt" in plan_content
+
+    def test_already_analyzed_files_skipped(self, gugudan_env):
+        """이미 분석된 파일은 재분석하지 않아야 한다."""
+        # 1차 실행
+        with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer), \
+             patch("planner.planner._call_claude", side_effect=_mock_call_claude_planner):
+            pipeline.run_pipeline(date="2026-03-01", force=True)
+
+        # 2차 실행 (force=False) - 이미 분석된 파일이므로 스킵
+        mock_analyze = MagicMock()
+        with patch("analyzer.analyzer.analyze_conversations", mock_analyze):
+            pipeline.run_pipeline(date="2026-03-01", force=False)
+
+        # analyze_conversations가 호출되지 않아야 함 (모든 파일이 이미 분석됨)
+        mock_analyze.assert_not_called()
+
+    def test_new_file_analyzed_with_existing(self, gugudan_env):
+        """기존 분석이 있어도 새 파일이 추가되면 새 파일만 분석해야 한다."""
+        # 1차 실행
+        with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer), \
+             patch("planner.planner._call_claude", side_effect=_mock_call_claude_planner):
+            pipeline.run_pipeline(date="2026-03-01", force=True)
+
+        # 새 대화 파일 추가
+        conv_dir = gugudan_env / "data" / "conversations"
+        new_file = conv_dir / "2026-03-01_devteam_dev.json"
+        new_file.write_text(json.dumps({
+            "messages": [
+                {"author": "alice", "timestamp": "2026-03-01T14:00:00Z",
+                 "content": "API 엔드포인트 추가해야 해"}
+            ]
+        }), encoding="utf-8")
+
+        # 2차 실행 (force=False) - 새 파일만 분석
+        mock_analyze = MagicMock()
+        mock_analyze.return_value = MagicMock(dev_topics=[], dev_topics_found=0)
+        with patch("analyzer.analyzer.analyze_conversations", mock_analyze):
+            pipeline.run_pipeline(date="2026-03-01", force=False)
+
+        # analyze_conversations가 호출되었고 새 파일만 전달됨
+        assert mock_analyze.called
+        called_files = mock_analyze.call_args[0][0]
+        called_names = [f.name for f in called_files]
+        assert "2026-03-01_devteam_dev.json" in called_names
+        assert "2026-03-01_devteam_general.json" not in called_names
