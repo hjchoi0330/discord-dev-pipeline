@@ -1,4 +1,4 @@
-"""Discord 음성 채널 녹음 봇 - 음성 대화를 Whisper로 전사하여 파일로 저장합니다."""
+"""Discord voice channel recording bot - transcribes voice conversations with Whisper and saves them to files."""
 
 from __future__ import annotations
 
@@ -11,19 +11,18 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import discord
 from discord.ext import commands
 
-# macOS Homebrew의 libopus 로드 (음성 디코딩에 필수)
+# Load libopus from macOS Homebrew (required for voice decoding)
 if not discord.opus.is_loaded():
     try:
         discord.opus.load_opus("/opt/homebrew/lib/libopus.dylib")
     except OSError:
-        pass  # 다른 OS에서는 시스템 기본 경로에서 자동 로드
+        pass  # On other OS, auto-loaded from system default path
 
 from collector.config import CollectorConfig, load_config
 from shared.claude_cli import clean_env as _clean_claude_env
@@ -67,11 +66,11 @@ class RecordingSession:
 
 
 def _transcribe_audio(audio_bytes: bytes, language: str = "ko", config: CollectorConfig | None = None) -> str:
-    """faster-whisper를 사용해 오디오 바이트를 텍스트로 전사합니다."""
+    """Transcribes audio bytes to text using faster-whisper."""
     try:
         from faster_whisper import WhisperModel
     except ImportError:
-        logger.error("faster-whisper가 설치되지 않았습니다. pip install faster-whisper 실행 후 재시도하세요.")
+        logger.error("faster-whisper is not installed. Run pip install faster-whisper and try again.")
         return ""
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -79,17 +78,17 @@ def _transcribe_audio(audio_bytes: bytes, language: str = "ko", config: Collecto
         tmp_path = tmp.name
 
     try:
-        # 모델은 프로세스 생애 동안 캐시됨 (첫 호출 시 다운로드)
+        # Model is cached for the lifetime of the process (downloaded on first call)
         model = _get_whisper_model(config)
         segments, info = model.transcribe(
             tmp_path,
             language=language,
             beam_size=5,
-            vad_filter=True,  # 무음 구간 자동 제거
+            vad_filter=True,  # Automatically remove silent segments
             vad_parameters={"min_silence_duration_ms": 500},
         )
         text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
-        logger.debug("전사 결과 (%.1fs): %s", info.duration, text[:100])
+        logger.debug("Transcription result (%.1fs): %s", info.duration, text[:100])
         return text
     finally:
         Path(tmp_path).unlink(missing_ok=True)
@@ -100,7 +99,7 @@ _whisper_lock = threading.Lock()
 
 
 def _get_whisper_model(config: CollectorConfig | None = None):
-    """Whisper 모델 싱글톤 (thread-safe)."""
+    """Whisper model singleton (thread-safe)."""
     global _whisper_model
     if _whisper_model is None:
         with _whisper_lock:
@@ -109,13 +108,13 @@ def _get_whisper_model(config: CollectorConfig | None = None):
                 model_size = config.whisper_model if config else "small"
                 device = config.whisper_device if config else "cpu"
                 compute_type = config.whisper_compute_type if config else "int8"
-                logger.info("Whisper 모델 로딩 중 (%s, %s)...", model_size, device)
+                logger.info("Loading Whisper model (%s, %s)...", model_size, device)
                 _whisper_model = WhisperModel(
                     model_size,
                     device=device,
                     compute_type=compute_type,
                 )
-                logger.info("Whisper 모델 준비 완료")
+                logger.info("Whisper model ready")
     return _whisper_model
 
 
@@ -127,7 +126,7 @@ def _save_transcription(
     session_end: str,
     messages: list[dict[str, Any]],
 ) -> Path:
-    """전사 결과를 JSON 파일로 저장합니다."""
+    """Saves transcription results to a JSON file."""
     date_str = session_start[:10]
     safe_guild = "".join(c if c.isalnum() or c in "-_" else "_" for c in guild_name)
     safe_channel = "".join(c if c.isalnum() or c in "-_" else "_" for c in channel_name)
@@ -137,7 +136,7 @@ def _save_transcription(
 
     lock = _get_file_lock(str(path))
     with lock:
-        # 기존 파일이 있으면 세션 추가 (같은 날 여러 세션 지원)
+        # Append to existing file if present (supports multiple sessions on the same day)
         existing_messages: list[dict] = []
         if path.exists():
             try:
@@ -159,12 +158,12 @@ def _save_transcription(
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    logger.info("전사 결과 저장: %s (%d개 발화)", path, len(messages))
+    logger.info("Transcription saved: %s (%d utterances)", path, len(messages))
     return path
 
 
 class VoiceCog(commands.Cog):
-    """음성 녹음 및 파이프라인 명령어 Cog."""
+    """Cog for voice recording and pipeline commands."""
 
     def __init__(self, bot: commands.Bot, config: CollectorConfig) -> None:
         self.bot = bot
@@ -174,43 +173,43 @@ class VoiceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
-        logger.info("봇 로그인 완료: %s (id=%s)", self.bot.user, self.bot.user.id)  # type: ignore[union-attr]
-        logger.info("음성 채널 녹음 모드 활성화. '!join [채널명]'으로 음성 채널에 접속하세요.")
+        logger.info("Bot logged in: %s (id=%s)", self.bot.user, self.bot.user.id)  # type: ignore[union-attr]
+        logger.info("Voice channel recording mode active. Use '!join [channel name]' to connect to a voice channel.")
 
-    # ── 음성 채널 명령어 ─────────────────────────────────────────────
+    # ── Voice channel commands ────────────────────────────────────────────
 
     @commands.command(name="join")
     async def join_command(self, ctx: commands.Context, *, channel_name: str = "") -> None:
-        """음성 채널에 접속하여 녹음을 시작합니다.
+        """Connects to a voice channel and starts recording.
 
-        Usage: !join [채널명]  (채널명 생략 시 사용자의 현재 채널 입장)
+        Usage: !join [channel name]  (omit channel name to join the user's current channel)
         """
         if not isinstance(ctx.guild, discord.Guild):
-            await ctx.send("서버 내에서 사용해야 합니다.")
+            await ctx.send("This command must be used inside a server.")
             return
 
-        # 채널 찾기: 명시적 이름 > 사용자 현재 채널
+        # Find channel: explicit name > user's current channel
         target_channel: discord.VoiceChannel | None = None
         if channel_name:
             target_channel = discord.utils.get(ctx.guild.voice_channels, name=channel_name)
             if not target_channel:
-                await ctx.send(f"음성 채널 '{channel_name}'을 찾을 수 없습니다.")
+                await ctx.send(f"Voice channel '{channel_name}' not found.")
                 return
         elif isinstance(ctx.author, discord.Member) and ctx.author.voice:
             target_channel = ctx.author.voice.channel  # type: ignore[assignment]
         else:
-            await ctx.send("채널명을 지정하거나 음성 채널에 먼저 입장하세요.")
+            await ctx.send("Please specify a channel name or join a voice channel first.")
             return
 
         guild_id = ctx.guild.id
         if guild_id in self._sessions:
-            await ctx.send("이미 녹음 중입니다. '!leave'로 먼저 종료하세요.")
+            await ctx.send("Already recording. Use '!leave' to stop first.")
             return
 
         try:
             vc = await target_channel.connect()
         except discord.ClientException as e:
-            await ctx.send(f"채널 접속 실패: {e}")
+            await ctx.send(f"Failed to connect to channel: {e}")
             return
 
         session = RecordingSession(
@@ -223,44 +222,44 @@ class VoiceCog(commands.Cog):
         )
         self._sessions[guild_id] = session
 
-        # discord.py sinks로 녹음 시작
+        # Start recording with discord.py sinks
         vc.start_recording(
             discord.sinks.WaveSink(),
             self._recording_finished_callback,
-            ctx.channel,  # 완료 후 결과 보낼 텍스트 채널
+            ctx.channel,  # Text channel to send results to when done
             session,
         )
 
         await ctx.send(
-            f"**#{target_channel.name}** 채널 녹음을 시작합니다. "
-            f"종료하려면 `!leave`를 입력하세요."
+            f"Recording started in **#{target_channel.name}**. "
+            f"Type `!leave` to stop."
         )
-        logger.info("[%s] 녹음 시작: #%s", ctx.guild.name, target_channel.name)
+        logger.info("[%s] Recording started: #%s", ctx.guild.name, target_channel.name)
 
     @commands.command(name="leave")
     async def leave_command(self, ctx: commands.Context) -> None:
-        """녹음을 종료하고 음성 채널에서 나갑니다.
+        """Stops recording and leaves the voice channel.
 
         Usage: !leave
         """
         if not isinstance(ctx.guild, discord.Guild):
-            await ctx.send("서버 내에서 사용해야 합니다.")
+            await ctx.send("This command must be used inside a server.")
             return
 
         guild_id = ctx.guild.id
         if guild_id not in self._sessions:
-            await ctx.send("현재 녹음 중인 세션이 없습니다.")
+            await ctx.send("No active recording session.")
             return
 
         session = self._sessions[guild_id]
-        await ctx.send("녹음을 종료합니다. 전사 처리 중...")
+        await ctx.send("Stopping recording. Transcription in progress...")
 
-        # stop_recording이 _recording_finished_callback을 트리거함
+        # stop_recording triggers _recording_finished_callback
         session.voice_client.stop_recording()
 
     @commands.command(name="status")
     async def status_command(self, ctx: commands.Context) -> None:
-        """현재 녹음 상태를 확인합니다."""
+        """Checks the current recording status."""
         if not isinstance(ctx.guild, discord.Guild):
             return
         session = self._sessions.get(ctx.guild.id)
@@ -269,11 +268,11 @@ class VoiceCog(commands.Cog):
                 session.started_at
             ).timestamp()
             await ctx.send(
-                f"녹음 중: **#{session.channel_name}** "
-                f"(경과 {int(elapsed // 60)}분 {int(elapsed % 60)}초)"
+                f"Recording: **#{session.channel_name}** "
+                f"(elapsed {int(elapsed // 60)}m {int(elapsed % 60)}s)"
             )
         else:
-            await ctx.send("현재 녹음 중인 세션이 없습니다.")
+            await ctx.send("No active recording session.")
 
     async def _run_pipeline_subprocess(self, auto_execute: bool = True) -> tuple[bool, str]:
         """Run the pipeline as a subprocess and return (success, message).
@@ -311,10 +310,10 @@ class VoiceCog(commands.Cog):
                 # Parse stderr for summary info (logging goes to stderr)
                 all_lines = (result.stderr or "").strip().splitlines()
                 topic_line = next(
-                    (l for l in all_lines if "토픽 발견" in l or "dev_topics_found" in l.lower()),
+                    (l for l in all_lines if "topics found" in l or "dev_topics_found" in l.lower()),
                     None,
                 )
-                plan_lines = [l for l in all_lines if "계획 생성" in l or "Skipping topic" in l]
+                plan_lines = [l for l in all_lines if "plan generated" in l or "Skipping topic" in l]
 
                 summary_parts = []
                 if topic_line:
@@ -326,13 +325,13 @@ class VoiceCog(commands.Cog):
 
                 return True, "\n".join(summary_parts)
             else:
-                error_excerpt = result.stderr[-1500:] if result.stderr else "알 수 없는 오류"
-                return False, f"파이프라인 오류 (코드 {result.returncode}):\n```\n{error_excerpt}\n```"
+                error_excerpt = result.stderr[-1500:] if result.stderr else "Unknown error"
+                return False, f"Pipeline error (code {result.returncode}):\n```\n{error_excerpt}\n```"
         except subprocess.TimeoutExpired:
-            return False, "파이프라인 타임아웃 (10분)."
+            return False, "Pipeline timed out (10 minutes)."
         except Exception as exc:
-            logger.exception("파이프라인 실행 실패")
-            return False, f"실행 실패: {exc}"
+            logger.exception("Pipeline execution failed")
+            return False, f"Execution failed: {exc}"
 
     _VALID_PIPELINE_MODES = ("full", "plan")
 
@@ -355,22 +354,22 @@ class VoiceCog(commands.Cog):
         """Run the analysis pipeline on saved transcription files.
 
         Usage:
-            !pipeline          — config 기본 모드로 실행
-            !pipeline plan     — 계획 생성까지만 (실행 생략)
-            !pipeline full     — 계획 생성 + Claude Code 실행
-            !pipeline help     — 사용법 표시
+            !pipeline          — run with config default mode
+            !pipeline plan     — plan generation only (skip execution)
+            !pipeline full     — plan generation + Claude Code execution
+            !pipeline help     — show usage
         """
         mode = mode.strip().lower()
 
         if mode == "help":
             config_mode = self.config.pipeline_mode
             await ctx.send(
-                "**파이프라인 사용법:**\n"
-                "`!pipeline` — 기본 모드로 실행\n"
-                "`!pipeline plan` — 분석 + 계획 생성까지만\n"
-                "`!pipeline full` — 분석 + 계획 생성 + Claude Code 실행\n"
-                "`!pipeline help` — 이 도움말 표시\n\n"
-                f"현재 기본 모드: **{config_mode}** "
+                "**Pipeline usage:**\n"
+                "`!pipeline` — run with default mode\n"
+                "`!pipeline plan` — analysis + plan generation only\n"
+                "`!pipeline full` — analysis + plan generation + Claude Code execution\n"
+                "`!pipeline help` — show this help\n\n"
+                f"Current default mode: **{config_mode}** "
                 f"(`config.yaml` → `collector.pipeline_mode`)"
             )
             return
@@ -383,8 +382,8 @@ class VoiceCog(commands.Cog):
             ctx.author, ctx.channel, ctx.guild, resolved_mode, auto_execute,
         )
 
-        mode_label = "전체 (계획 + 실행)" if auto_execute else "계획 생성까지만"
-        await ctx.send(f"파이프라인 시작 중... (모드: **{mode_label}**)")
+        mode_label = "full (plan + execute)" if auto_execute else "plan generation only"
+        await ctx.send(f"Starting pipeline... (mode: **{mode_label}**)")
 
         plans_dir = Path(__file__).parent.parent / "data" / "plans"
         existing = set(plans_dir.glob("*.md")) if plans_dir.exists() else set()
@@ -400,16 +399,16 @@ class VoiceCog(commands.Cog):
             await self._post_plans_to_channel(ctx.channel, new_plans)
 
             if auto_execute:
-                await ctx.send("✅ 파이프라인 완료! (계획 생성 + 실행)")
+                await ctx.send("✅ Pipeline complete! (plan generation + execution)")
             elif new_plans:
                 await ctx.send(
-                    "✅ 계획 생성 완료!\n"
-                    "`!pipeline full`로 계획을 실행할 수 있습니다."
+                    "✅ Plan generation complete!\n"
+                    "Use `!pipeline full` to execute the plans."
                 )
             else:
-                await ctx.send("✅ 파이프라인 완료! (새 계획 없음)")
+                await ctx.send("✅ Pipeline complete! (no new plans)")
         else:
-            await ctx.send("❌ 파이프라인 실패.")
+            await ctx.send("❌ Pipeline failed.")
 
     # ── Plan posting ────────────────────────────────────────────────
 
@@ -451,7 +450,7 @@ class VoiceCog(commands.Cog):
 
             await channel.send(msg)
 
-    # ── 내부 콜백 ────────────────────────────────────────────────────
+    # ── Internal callbacks ────────────────────────────────────────────────────
 
     async def _recording_finished_callback(
         self,
@@ -460,22 +459,22 @@ class VoiceCog(commands.Cog):
         session: RecordingSession,
         *args,
     ) -> None:
-        """녹음 완료 후 Whisper로 전사하고 파일에 저장합니다."""
+        """Transcribes audio with Whisper after recording finishes and saves to file."""
         guild_id = session.guild_id
         self._sessions.pop(guild_id, None)
 
-        # 음성 채널 연결 해제
+        # Disconnect from voice channel
         if session.voice_client.is_connected():
             await session.voice_client.disconnect()
 
         session_end = datetime.now(timezone.utc).isoformat()
 
         if not sink.audio_data:
-            await text_channel.send("녹음된 오디오가 없습니다.")
+            await text_channel.send("No audio was recorded.")
             return
 
         await text_channel.send(
-            f"{len(sink.audio_data)}명의 오디오 전사 중... (Whisper 처리 중)"
+            f"Transcribing audio from {len(sink.audio_data)} user(s)... (Whisper processing)"
         )
 
         messages: list[dict[str, Any]] = []
@@ -493,17 +492,17 @@ class VoiceCog(commands.Cog):
             raw_bytes = audio_data.file.read()
 
             if len(raw_bytes) < 1000:
-                # 너무 짧은 오디오 (무음) 건너뜀
-                logger.debug("사용자 %s: 오디오 너무 짧아 건너뜀 (%d bytes)", username, len(raw_bytes))
+                # Audio too short (silence) — skip
+                logger.debug("User %s: audio too short, skipping (%d bytes)", username, len(raw_bytes))
                 continue
 
-            # 블로킹 작업을 스레드풀에서 실행
+            # Run blocking work in thread pool
             text = await loop.run_in_executor(
                 None, _transcribe_audio, raw_bytes, self.config.whisper_language, self.config
             )
 
             if not text.strip():
-                logger.debug("사용자 %s: 전사 결과 없음", username)
+                logger.debug("User %s: no transcription result", username)
                 continue
 
             messages.append(
@@ -521,10 +520,10 @@ class VoiceCog(commands.Cog):
             logger.info("[%s] %s: %s", session.channel_name, username, text[:80])
 
         if not messages:
-            await text_channel.send("전사된 내용이 없습니다 (무음 또는 인식 불가).")
+            await text_channel.send("No transcription results (silence or unrecognizable audio).")
             return
 
-        # 파일 저장
+        # Save to file
         saved_path = await loop.run_in_executor(
             None,
             _save_transcription,
@@ -540,18 +539,18 @@ class VoiceCog(commands.Cog):
             f"**{m['author']}**: {m['content'][:100]}" for m in messages[:5]
         )
         if len(messages) > 5:
-            summary += f"\n... 외 {len(messages) - 5}개 발화"
+            summary += f"\n... and {len(messages) - 5} more utterance(s)"
 
         await text_channel.send(
-            f"전사 완료 ({len(messages)}개 발화):\n{summary}\n\n"
-            f"저장 위치: `{saved_path}`"
+            f"Transcription complete ({len(messages)} utterance(s)):\n{summary}\n\n"
+            f"Saved to: `{saved_path}`"
         )
 
         if self.config.auto_pipeline:
             resolved_mode = self._resolve_pipeline_mode()
             auto_execute = resolved_mode == "full"
-            mode_label = "전체 (계획 + 실행)" if auto_execute else "계획 생성까지만"
-            await text_channel.send(f"파이프라인 자동 실행 중... (모드: **{mode_label}**)")
+            mode_label = "full (plan + execute)" if auto_execute else "plan generation only"
+            await text_channel.send(f"Running pipeline automatically... (mode: **{mode_label}**)")
 
             plans_dir = Path(__file__).parent.parent / "data" / "plans"
             existing = set(plans_dir.glob("*.md")) if plans_dir.exists() else set()
@@ -566,24 +565,24 @@ class VoiceCog(commands.Cog):
                 )
                 await self._post_plans_to_channel(text_channel, new_plans)
                 if auto_execute:
-                    await text_channel.send("✅ 파이프라인 완료! (계획 생성 + 실행)")
+                    await text_channel.send("✅ Pipeline complete! (plan generation + execution)")
                 elif new_plans:
                     await text_channel.send(
-                        "✅ 계획 생성 완료!\n"
-                        "`!pipeline full`로 계획을 실행할 수 있습니다."
+                        "✅ Plan generation complete!\n"
+                        "Use `!pipeline full` to execute the plans."
                     )
                 else:
-                    await text_channel.send("✅ 파이프라인 완료! (새 계획 없음)")
+                    await text_channel.send("✅ Pipeline complete! (no new plans)")
             else:
-                await text_channel.send("❌ 파이프라인 실패.")
+                await text_channel.send("❌ Pipeline failed.")
         else:
             await text_channel.send(
-                f"`!pipeline`으로 개발 계획을 분석/생성할 수 있습니다."
+                "Use `!pipeline` to analyze/generate development plans."
             )
 
 
 class VoiceBot(commands.Bot):
-    """최소 Bot 클래스 — Cog 등록만 담당합니다."""
+    """Minimal Bot class — responsible only for registering Cogs."""
 
     def __init__(self, config: CollectorConfig) -> None:
         intents = discord.Intents.all()
@@ -592,10 +591,10 @@ class VoiceBot(commands.Bot):
 
 
 def run() -> None:
-    """봇 진입점."""
+    """Bot entry point."""
     config = load_config()
     bot = VoiceBot(config)
-    logger.info("음성 녹음 봇 시작 중...")
+    logger.info("Starting voice recording bot...")
     bot.run(config.token)
 
 

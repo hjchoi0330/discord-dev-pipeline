@@ -1,9 +1,9 @@
-"""Pipeline 실행 이력 관리 모듈.
+"""Pipeline execution history management module.
 
-파이프라인의 각 실행(run)을 단일 단위로 추적하여,
-stage별 상태, 입력/출력 요약, 타이밍 정보를 기록합니다.
+Tracks each pipeline run as a single unit, recording per-stage status,
+input/output summaries, and timing information.
 
-저장 경로: data/pipeline_runs/{date}_{run_id}.json
+Storage path: data/pipeline_runs/{date}_{run_id}.json
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 파이프라인 stage 이름 상수
+# Pipeline stage name constants
 STAGE_COLLECT = "collect"
 STAGE_ANALYZE = "analyze"
 STAGE_PLAN = "plan"
@@ -29,7 +29,7 @@ ALL_STAGES = [STAGE_COLLECT, STAGE_ANALYZE, STAGE_PLAN, STAGE_EXECUTE]
 
 @dataclass
 class StageRecord:
-    """파이프라인 개별 stage의 실행 기록."""
+    """Execution record for an individual pipeline stage."""
 
     name: str
     status: str = "pending"  # pending | running | completed | failed | skipped
@@ -63,7 +63,7 @@ class StageRecord:
             self.error = reason
 
     def duration_seconds(self) -> float | None:
-        """stage 실행 소요 시간(초). 시작/종료 정보가 없으면 None."""
+        """Elapsed time for the stage in seconds. Returns None if start/end info is missing."""
         if not self.started_at or not self.completed_at:
             return None
         start = datetime.fromisoformat(self.started_at)
@@ -73,7 +73,7 @@ class StageRecord:
 
 @dataclass
 class PipelineRun:
-    """파이프라인 전체 실행의 기록."""
+    """Record of an entire pipeline run."""
 
     run_id: str
     date: str
@@ -85,7 +85,7 @@ class PipelineRun:
 
     @classmethod
     def create(cls, date: str, config: dict[str, Any] | None = None) -> PipelineRun:
-        """새 파이프라인 실행 기록을 생성합니다."""
+        """Create a new pipeline run record."""
         run_id = (
             datetime.now(timezone.utc).strftime("%H%M%S")
             + "-"
@@ -100,14 +100,14 @@ class PipelineRun:
         )
 
     def get_stage(self, name: str) -> StageRecord | None:
-        """이름으로 stage 기록을 조회합니다."""
+        """Look up a stage record by name."""
         for stage in self.stages:
             if stage.name == name:
                 return stage
         return None
 
     def finish(self) -> None:
-        """파이프라인 실행을 종료하고 최종 상태를 결정합니다."""
+        """Finalize the pipeline run and determine its terminal status."""
         self.completed_at = datetime.now(timezone.utc).isoformat()
         has_failed = any(s.status == "failed" for s in self.stages)
         all_terminal = all(
@@ -124,7 +124,7 @@ class PipelineRun:
         return asdict(self)
 
     def summary_line(self) -> str:
-        """사람이 읽기 쉬운 한 줄 요약을 반환합니다."""
+        """Return a human-readable one-line summary."""
         marks = {"completed": "O", "failed": "X", "skipped": "-", "pending": "?", "running": "~"}
         parts = []
         for s in self.stages:
@@ -133,7 +133,7 @@ class PipelineRun:
         return f"[{self.run_id}] {self.date} {self.status} | {' -> '.join(parts)}"
 
     def duration_seconds(self) -> float | None:
-        """전체 파이프라인 소요 시간(초)."""
+        """Total elapsed time for the pipeline run in seconds."""
         if not self.started_at or not self.completed_at:
             return None
         start = datetime.fromisoformat(self.started_at)
@@ -146,7 +146,7 @@ def _runs_dir(data_dir: Path) -> Path:
 
 
 def save_run(run: PipelineRun, data_dir: Path) -> Path:
-    """파이프라인 실행 기록을 디스크에 저장합니다."""
+    """Save a pipeline run record to disk."""
     runs = _runs_dir(data_dir)
     runs.mkdir(parents=True, exist_ok=True)
     path = runs / f"{run.date}_{run.run_id}.json"
@@ -157,14 +157,14 @@ def save_run(run: PipelineRun, data_dir: Path) -> Path:
 
 
 def load_runs(data_dir: Path, date: str | None = None) -> list[PipelineRun]:
-    """디스크에서 파이프라인 실행 기록을 로드합니다.
+    """Load pipeline run records from disk.
 
     Args:
-        data_dir: 데이터 루트 디렉토리.
-        date: 특정 날짜만 필터링 (YYYY-MM-DD). None이면 전체.
+        data_dir: Root data directory.
+        date: Filter to a specific date (YYYY-MM-DD). None loads all.
 
     Returns:
-        PipelineRun 목록 (시간순 정렬).
+        List of PipelineRun objects sorted by time.
     """
     runs_path = _runs_dir(data_dir)
     if not runs_path.exists():

@@ -104,7 +104,7 @@ def _format_messages(topic: DevTopic) -> str:
     if not topic.messages:
         return "(no specific messages captured)"
     lines = []
-    for msg in topic.messages[:20]:  # 최대 20개 메시지만 포함
+    for msg in topic.messages[:20]:  # include at most 20 messages
         ts = msg.timestamp[:19].replace("T", " ") if msg.timestamp else ""
         lines.append(f"- {msg.author} ({ts}): {msg.content}")
     return "\n".join(lines)
@@ -162,7 +162,7 @@ def generate_plans(
     actionable_topics.sort(key=lambda t: priority_order.get(t.priority, 99))
 
     if not actionable_topics:
-        logger.info("실행 가능한 개발 토픽이 없습니다.")
+        logger.info("No actionable development topics found.")
         return []
 
     manifest = _load_planned_manifest(data_dir)
@@ -193,7 +193,7 @@ def generate_plans(
         try:
             plan_content = _call_claude(prompt)
         except Exception as e:
-            logger.error("계획 생성 실패 (토픽: %s): %s", topic.title, e)
+            logger.error("Failed to generate plan (topic: %s): %s", topic.title, e)
             continue
 
         slug = _sanitize_filename(topic.title)
@@ -202,7 +202,7 @@ def generate_plans(
         output_path.write_text(plan_content, encoding="utf-8")
         _mark_topic_planned(topic, output_path, data_dir)
 
-        logger.info("계획 생성: %s", output_path)
+        logger.info("Plan generated: %s", output_path)
         generated.append(output_path)
 
     return generated

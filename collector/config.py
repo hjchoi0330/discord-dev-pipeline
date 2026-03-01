@@ -12,32 +12,32 @@ import yaml
 
 @dataclass
 class CollectorConfig:
-    """Discord 음성 녹음 봇 설정.
+    """Discord voice recording bot configuration.
 
-    config.yaml에서 로드되며, 환경변수로 오버라이드 가능합니다.
+    Loaded from config.yaml; individual values can be overridden via environment variables.
     """
 
     token: str
     data_dir: str = "data/conversations"
-    # 음성 채널 설정
+    # Voice channel settings
     whisper_model: str = "small"       # tiny/base/small/medium/large-v3
-    whisper_language: str = "ko"       # 전사 언어 코드 (ko, en, ja 등)
+    whisper_language: str = "ko"       # Transcription language code (ko, en, ja, etc.)
     whisper_device: str = "cpu"        # cpu / cuda
     whisper_compute_type: str = "int8" # int8 / float16 / float32
-    # 채널 필터
-    monitored_voice_channels: list[str] = field(default_factory=list)  # 빈 목록 = 모두
+    # Channel filters
+    monitored_voice_channels: list[str] = field(default_factory=list)  # empty list = all channels
     ignored_voice_channels: list[str] = field(default_factory=list)
-    # 파이프라인 자동 실행
+    # Auto-run pipeline after recording
     auto_pipeline: bool = False
-    # 봇 파이프라인 실행 모드: "full" (계획+실행) | "plan" (계획까지만)
+    # Bot pipeline execution mode: "full" (plan+execute) | "plan" (plan only)
     pipeline_mode: str = "full"
 
 
 def load_config(config_path: str = "config.yaml") -> CollectorConfig:
-    """YAML 파일과 환경변수로부터 설정을 로드합니다.
+    """Loads configuration from a YAML file and environment variables.
 
-    DISCORD_BOT_TOKEN은 필수입니다 (env var 또는 config.yaml).
-    나머지는 데이터클래스 기본값으로 폴백합니다.
+    DISCORD_BOT_TOKEN is required (env var or config.yaml).
+    All other values fall back to the dataclass defaults.
     """
     base: dict[str, Any] = {}
 
@@ -54,7 +54,7 @@ def load_config(config_path: str = "config.yaml") -> CollectorConfig:
     token = os.environ.get("DISCORD_BOT_TOKEN", discord_cfg.get("token", ""))
     if not token:
         raise ValueError(
-            "봇 토큰이 필요합니다. DISCORD_BOT_TOKEN 환경변수 또는 config.yaml의 discord.token을 설정하세요."
+            "Bot token is required. Set the DISCORD_BOT_TOKEN environment variable or discord.token in config.yaml."
         )
 
     return CollectorConfig(

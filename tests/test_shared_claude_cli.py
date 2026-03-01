@@ -1,4 +1,4 @@
-"""shared.claude_cli 모듈 단위 테스트."""
+"""Unit tests for the shared.claude_cli module."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class TestCallClaude:
             stdout="",
             stderr="Error: something went wrong",
         )
-        with pytest.raises(RuntimeError, match="claude CLI 오류"):
+        with pytest.raises(RuntimeError, match="claude CLI error"):
             call_claude("test prompt")
 
     @patch("shared.claude_cli.subprocess.run")
@@ -44,7 +44,7 @@ class TestCallClaude:
     @patch("shared.claude_cli.subprocess.run")
     def test_claude_not_found_raises_runtime_error(self, mock_run):
         mock_run.side_effect = FileNotFoundError("No such file")
-        with pytest.raises(RuntimeError, match="claude CLI를 찾을 수 없습니다"):
+        with pytest.raises(RuntimeError, match="claude CLI not found"):
             call_claude("test prompt")
 
     @patch("shared.claude_cli.subprocess.run")

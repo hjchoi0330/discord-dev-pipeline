@@ -1,6 +1,6 @@
-"""E2E 테스트: Golang 구구단 시나리오 전체 파이프라인 검증.
+"""E2E test: Full pipeline validation for the Golang multiplication-table scenario.
 
-transcript → analysis → plan → executor(mock) 전체 흐름을 테스트합니다.
+Tests the complete flow: transcript -> analysis -> plan -> executor (mock).
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ from run_demo import (
 
 @pytest.fixture
 def gugudan_env(tmp_path, monkeypatch):
-    """구구단 E2E 테스트용 환경을 설정합니다.
+    """Set up the environment for the multiplication-table E2E test.
 
-    디렉토리 구조:
+    Directory structure:
       tmp_path/
         data/
           conversations/
@@ -35,7 +35,7 @@ def gugudan_env(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "_CONFIG_PATH", tmp_path / "no.yaml")
     monkeypatch.chdir(tmp_path)
 
-    # conversations 디렉토리 및 transcript 생성
+    # Create the conversations directory and transcript
     conv_dir = data_dir / "conversations"
     conv_dir.mkdir()
     transcript = conv_dir / "2026-03-01_devteam_general.json"
@@ -79,10 +79,10 @@ def gugudan_env(tmp_path, monkeypatch):
 
 
 class TestE2EGugudanPipeline:
-    """구구단 시나리오의 전체 파이프라인을 검증합니다."""
+    """Validates the full pipeline for the multiplication-table scenario."""
 
     def test_analysis_extracts_gugudan_topic(self, gugudan_env):
-        """1단계: transcript에서 구구단 토픽이 추출되어야 한다."""
+        """Step 1: The multiplication-table topic should be extracted from the transcript."""
         from analyzer.analyzer import analyze_conversations
 
         conv_files = list((gugudan_env / "data" / "conversations").glob("2026-03-01_*.json"))
@@ -99,7 +99,7 @@ class TestE2EGugudanPipeline:
         assert topic.estimated_complexity == "small"
 
     def test_plan_generation_for_gugudan(self, gugudan_env):
-        """2단계: 분석 결과로부터 구구단 plan이 생성되어야 한다."""
+        """Step 2: A multiplication-table plan should be generated from the analysis result."""
         from analyzer.analyzer import analyze_conversations
         from planner.planner import generate_plans
 
@@ -119,16 +119,16 @@ class TestE2EGugudanPipeline:
         assert "main.go" in plan_content
 
     def test_executor_creates_go_files(self, gugudan_env):
-        """3단계: executor가 data/result/go-gugudan에 Go 파일을 생성해야 한다."""
+        """Step 3: The executor should create Go files under data/result/go-gugudan."""
         result = _mock_executor_for_gugudan("")
 
         assert "Successfully" in result
 
-        # chdir이 gugudan_env(tmp_path)이므로 data/result/go-gugudan은 tmp_path 하위
+        # chdir is gugudan_env (tmp_path), so data/result/go-gugudan is under tmp_path
         result_dir = gugudan_env / "data" / "result" / "go-gugudan"
         assert result_dir.exists()
 
-        # main.go 검증
+        # Verify main.go
         main_go = result_dir / "main.go"
         assert main_go.exists()
         content = main_go.read_text(encoding="utf-8")
@@ -137,7 +137,7 @@ class TestE2EGugudanPipeline:
         assert "1~9" in content
         assert "for i := 1; i <= 9; i++" in content
 
-        # go.mod 검증
+        # Verify go.mod
         go_mod = result_dir / "go.mod"
         assert go_mod.exists()
         mod_content = go_mod.read_text(encoding="utf-8")
@@ -145,19 +145,19 @@ class TestE2EGugudanPipeline:
         assert "go 1.21" in mod_content
 
     def test_full_pipeline_end_to_end(self, gugudan_env):
-        """전체 파이프라인 E2E: transcript → analysis → plan 생성까지."""
+        """Full pipeline E2E: transcript -> analysis -> plan generation."""
         with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer), \
              patch("planner.planner._call_claude", side_effect=_mock_call_claude_planner):
             pipeline.run_pipeline(date="2026-03-01", force=True)
 
-        # analysis 결과 확인 (analyzer는 Path("data/analysis")로 저장, chdir=tmp_path)
+        # Verify analysis result (analyzer saves to Path("data/analysis"), chdir=tmp_path)
         analysis_path = gugudan_env / "data" / "analysis" / "2026-03-01_analysis.json"
         assert analysis_path.exists()
         analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
         assert analysis["dev_topics_found"] == 1
         assert "구구단" in analysis["dev_topics"][0]["title"]
 
-        # plan 파일 확인 (pipeline._DATA_DIR / "plans")
+        # Verify plan files (pipeline._DATA_DIR / "plans")
         plan_dir = gugudan_env / "data" / "plans"
         plans = list(plan_dir.glob("2026-03-01_*.md"))
         assert len(plans) == 1
@@ -165,28 +165,28 @@ class TestE2EGugudanPipeline:
         assert "## Claude Code Prompt" in plan_content
 
     def test_already_analyzed_files_skipped(self, gugudan_env):
-        """이미 분석된 파일은 재분석하지 않아야 한다."""
-        # 1차 실행
+        """Already-analyzed files should not be re-analyzed."""
+        # First run
         with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer), \
              patch("planner.planner._call_claude", side_effect=_mock_call_claude_planner):
             pipeline.run_pipeline(date="2026-03-01", force=True)
 
-        # 2차 실행 (force=False) - 이미 분석된 파일이므로 스킵
+        # Second run (force=False) - files already analyzed, should be skipped
         mock_analyze = MagicMock()
         with patch("analyzer.analyzer.analyze_conversations", mock_analyze):
             pipeline.run_pipeline(date="2026-03-01", force=False)
 
-        # analyze_conversations가 호출되지 않아야 함 (모든 파일이 이미 분석됨)
+        # analyze_conversations should not be called (all files already analyzed)
         mock_analyze.assert_not_called()
 
     def test_new_file_analyzed_with_existing(self, gugudan_env):
-        """기존 분석이 있어도 새 파일이 추가되면 새 파일만 분석해야 한다."""
-        # 1차 실행
+        """When a new file is added despite an existing analysis, only the new file should be analyzed."""
+        # First run
         with patch("analyzer.analyzer._call_claude", side_effect=_mock_call_claude_analyzer), \
              patch("planner.planner._call_claude", side_effect=_mock_call_claude_planner):
             pipeline.run_pipeline(date="2026-03-01", force=True)
 
-        # 새 대화 파일 추가
+        # Add a new conversation file
         conv_dir = gugudan_env / "data" / "conversations"
         new_file = conv_dir / "2026-03-01_devteam_dev.json"
         new_file.write_text(json.dumps({
@@ -196,13 +196,13 @@ class TestE2EGugudanPipeline:
             ]
         }), encoding="utf-8")
 
-        # 2차 실행 (force=False) - 새 파일만 분석
+        # Second run (force=False) - only the new file should be analyzed
         mock_analyze = MagicMock()
         mock_analyze.return_value = MagicMock(dev_topics=[], dev_topics_found=0)
         with patch("analyzer.analyzer.analyze_conversations", mock_analyze):
             pipeline.run_pipeline(date="2026-03-01", force=False)
 
-        # analyze_conversations가 호출되었고 새 파일만 전달됨
+        # analyze_conversations should be called with only the new file
         assert mock_analyze.called
         called_files = mock_analyze.call_args[0][0]
         called_names = [f.name for f in called_files]

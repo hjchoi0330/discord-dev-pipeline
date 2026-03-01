@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -63,37 +62,37 @@ def _extract_project_dir(
     data_dir: Path,
     plan_file: Path | None = None,
 ) -> Path:
-    """Plan 내용에서 프로젝트 디렉토리를 결정합니다.
+    """Determine the project directory from the plan content.
 
-    우선순위:
-      1. plan 본문에서 'data/result/<dirname>' 패턴 추출
-      2. 기존 data/result/ 하위 디렉토리 중 키워드가 겹치는 프로젝트 재사용
-      3. plan 파일명 기반으로 새 디렉토리 생성
+    Priority:
+      1. Extract 'data/result/<dirname>' pattern from the plan body
+      2. Reuse an existing directory under data/result/ whose keywords overlap
+      3. Create a new directory based on the plan filename
 
     Args:
-        plan_text: plan 마크다운 전체 텍스트.
-        data_dir: 데이터 루트 디렉토리.
-        plan_file: plan 파일 경로 (디렉토리명 생성에 사용).
+        plan_text: Full markdown text of the plan.
+        data_dir: Root data directory.
+        plan_file: Path to the plan file (used to derive the directory name).
     """
     result_dir = data_dir / "result"
 
-    # 1) plan 본문에 명시적 경로가 있으면 그대로 사용
+    # 1) Use the explicit path if present in the plan body
     match = re.search(r"data/result/([\w-]+)", plan_text)
     if match:
         return result_dir / match.group(1)
 
-    # 2) plan 파일명에서 토픽 키워드 추출
+    # 2) Extract topic keywords from the plan filename
     topic_name = ""
     if plan_file:
-        # '2026-03-01_docker-oom-memory-limit.md' → 'docker-oom-memory-limit'
+        # '2026-03-01_docker-oom-memory-limit.md' -> 'docker-oom-memory-limit'
         stem = plan_file.stem
-        # 날짜 접두사 제거 (YYYY-MM-DD_)
+        # Strip the date prefix (YYYY-MM-DD_)
         topic_name = re.sub(r"^\d{4}-\d{2}-\d{2}_", "", stem)
 
-    # 3) 기존 프로젝트 디렉토리 중 키워드 매칭으로 관련 프로젝트 탐색
+    # 3) Search for a related existing project directory by keyword matching
     if topic_name and result_dir.exists():
         topic_keywords = set(topic_name.lower().replace("_", "-").split("-"))
-        # 의미 없는 짧은 단어 제거
+        # Remove meaningless short words
         topic_keywords = {k for k in topic_keywords if len(k) >= 2}
 
         best_match: Path | None = None
@@ -110,12 +109,12 @@ def _extract_project_dir(
 
         if best_match:
             logger.info(
-                "기존 프로젝트 디렉토리 재사용: %s (매칭 점수: %d)",
+                "Reusing existing project directory: %s (match score: %d)",
                 best_match.name, best_score,
             )
             return best_match
 
-    # 4) 토픽명이 있으면 새 디렉토리 생성, 없으면 default-project
+    # 4) Create a new directory from the topic name, or fall back to default-project
     if topic_name:
         safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", topic_name).strip("-")
         if safe_name:
@@ -285,7 +284,7 @@ def execute_plan(
 
     logger.info("Executing plan: %s", plan_file.name)
     logger.info("Using claude binary: %s", claude_bin)
-    logger.info("작업 디렉토리: %s", project_dir)
+    logger.info("Working directory: %s", project_dir)
 
     # Remove all Claude Code env vars to avoid nested session detection
     env = _clean_claude_env()

@@ -1,4 +1,4 @@
-"""pipeline 및 config 모듈 단위 테스트."""
+"""Unit tests for the pipeline and config modules."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-# pipeline 모듈은 import 시 load_dotenv()를 호출하므로 주의
+# Note: importing the pipeline module calls load_dotenv() at import time
 import pipeline
 from collector.config import CollectorConfig, load_config
 
@@ -58,11 +58,11 @@ class TestFindConversationFiles:
         (conv_dir / "2026-01-03_server_general.json").write_text("{}")
 
         files = pipeline._find_conversation_files("2026-01-01")
-        # 당일 2개 + 전날(2025-12-31) 없음 = 2개
+        # 2 files for that day + none for previous day (2025-12-31) = 2
         assert len(files) == 2
 
     def test_includes_previous_day_files(self, tmp_path, monkeypatch):
-        """날짜 경계를 넘는 대화를 위해 전날 파일도 포함해야 한다."""
+        """Previous day's files should also be included to capture cross-midnight conversations."""
         monkeypatch.setattr(pipeline, "_DATA_DIR", tmp_path)
         conv_dir = tmp_path / "conversations"
         conv_dir.mkdir()
@@ -71,7 +71,7 @@ class TestFindConversationFiles:
         (conv_dir / "2026-01-02_server_general.json").write_text("{}")
         (conv_dir / "2026-01-03_server_other.json").write_text("{}")
 
-        # 2026-01-02로 검색 → 당일(01-02) + 전날(01-01) = 2개
+        # Search for 2026-01-02 -> same day (01-02) + previous day (01-01) = 2 files
         files = pipeline._find_conversation_files("2026-01-02")
         assert len(files) == 2
         filenames = [f.name for f in files]
@@ -209,23 +209,6 @@ class TestGetAlreadyAnalyzedFiles:
         assert "2026-01-01_server_general.json" in called_names
 
 
-# ── _print_summary ───────────────────────────────────────────────────
-
-
-class TestPrintSummary:
-    def test_with_results(self):
-        from executor.executor import ExecutionResult
-        results = [
-            ExecutionResult("a.md", "", "", True, ""),
-            ExecutionResult("b.md", "", "", False, "Something failed"),
-        ]
-        # _print_summary는 logger.info만 호출하므로 예외 없이 실행되면 통과
-        pipeline._print_summary(results)
-
-    def test_empty_results(self):
-        pipeline._print_summary([])
-
-
 # ── CollectorConfig (load_config) ────────────────────────────────────
 
 
@@ -263,7 +246,7 @@ class TestCollectorConfig:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(yaml.dump({"discord": {"token": ""}}))
 
-        with pytest.raises(ValueError, match="봇 토큰이 필요합니다"):
+        with pytest.raises(ValueError, match="Bot token is required"):
             load_config(str(config_file))
 
     def test_env_overrides_yaml(self, tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-"""planner 모듈 단위 테스트."""
+"""Unit tests for the planner module."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class TestSanitizeFilename:
 
     def test_multiple_spaces_collapsed(self):
         result = _sanitize_filename("too   many   spaces")
-        assert "--" not in result  # 연속 하이픈 없음
+        assert "--" not in result  # no consecutive hyphens
 
     def test_truncation(self):
         long_title = "a" * 100
@@ -87,7 +87,7 @@ class TestFormatMessages:
             estimated_complexity="small",
         )
         result = _format_messages(topic)
-        # 21번째 이후 메시지는 포함되지 않아야 함
+        # messages beyond the 21st should not be included
         assert "user20" not in result
         assert "user19" in result
 
@@ -148,7 +148,7 @@ class TestGeneratePlans:
 
         result = generate_plans(analysis, tmp_path / "plans")
         assert len(result) == 3
-        # Claude가 high → medium → low 순으로 호출되었는지 확인
+        # Verify Claude is called in high -> medium -> low order
         calls = mock_claude.call_args_list
         assert "High task" in calls[0][0][0]
         assert "Medium task" in calls[1][0][0]
@@ -259,7 +259,7 @@ class TestPlannedManifest:
         assert "new_id" in manifest
 
 
-# ── generate_plans: Claude CLI 실패 시 graceful skip ─────────────────
+# ── generate_plans: graceful skip on Claude CLI failure ──────────────
 
 
 class TestGeneratePlansCLIFailure:
@@ -283,7 +283,7 @@ class TestGeneratePlansCLIFailure:
 
     @patch("planner.planner._call_claude")
     def test_claude_failure_skips_topic(self, mock_claude, tmp_path):
-        """Claude CLI 실패 시 해당 토픽을 건너뛰고 나머지를 계속 처리해야 한다."""
+        """On Claude CLI failure, the affected topic should be skipped and remaining topics processed."""
         mock_claude.side_effect = [
             RuntimeError("claude CLI 오류"),
             "# Plan: Second Topic\n\nContent here.",
@@ -300,7 +300,7 @@ class TestGeneratePlansCLIFailure:
 
     @patch("planner.planner._call_claude")
     def test_all_claude_failures_returns_empty(self, mock_claude, tmp_path):
-        """모든 Claude CLI 호출이 실패하면 빈 목록을 반환해야 한다."""
+        """When all Claude CLI calls fail, an empty list should be returned."""
         mock_claude.side_effect = RuntimeError("claude CLI 오류")
         analysis = self._make_analysis([
             self._make_topic("Topic A"),

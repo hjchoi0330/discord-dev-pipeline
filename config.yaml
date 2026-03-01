@@ -3,24 +3,24 @@ discord:
   token: ""
 
 collector:
-  # 데이터 저장 디렉토리 (기본값: data/conversations, DATA_DIR 환경변수로 오버라이드 가능)
+  # Data storage directory (default: data/conversations, overridable via DATA_DIR env var)
   data_dir: "data/conversations"
 
-  # Whisper 음성 전사 설정
+  # Whisper speech transcription settings
   whisper_model: "small"       # tiny | base | small | medium | large-v3
-  whisper_language: "ko"       # 전사 언어 (ko, en, ja, zh ...)
-  whisper_device: "cpu"        # cpu | cuda (GPU 가속)
+  whisper_language: "ko"       # transcription language (ko, en, ja, zh ...)
+  whisper_device: "cpu"        # cpu | cuda (GPU acceleration)
   whisper_compute_type: "int8" # int8 | float16 | float32
 
-  # 파이프라인 자동 실행 (!leave 후 자동으로 파이프라인 실행)
+  # Auto-run pipeline after voice session ends (!leave triggers pipeline automatically)
   auto_pipeline: false
 
-  # 봇 파이프라인 실행 모드
-  #   "full" = 분석 → 계획 → 실행 (전체 파이프라인)
-  #   "plan" = 분석 → 계획까지만 (실행 생략, 수동 검토용)
+  # Bot pipeline execution mode
+  #   "full" = analyze -> plan -> execute (full pipeline)
+  #   "plan" = analyze -> plan only (skips execution, for manual review)
   pipeline_mode: "full"
 
-  # 음성 채널 필터 (빈 목록 = 모든 채널)
+  # Voice channel filter (empty list = all channels)
   monitored_voice_channels: []
   ignored_voice_channels:
     - "AFK"
@@ -28,14 +28,6 @@ collector:
 pipeline:
   data_dir: "data"
   auto_execute: false  # if true, auto-run Claude Code on new plans
-  dry_run: false
-
-analyzer:
-  model: "claude-sonnet-4-6"
-  min_messages_for_topic: 3  # minimum messages to consider a topic
-
-planner:
-  model: "claude-sonnet-4-6"
 
 executor:
   claude_cli_path: "claude"  # path to claude CLI binary

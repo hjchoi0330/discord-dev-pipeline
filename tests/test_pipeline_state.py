@@ -1,4 +1,4 @@
-"""shared/pipeline_state 모듈 단위 테스트."""
+"""Unit tests for the shared/pipeline_state module."""
 
 from __future__ import annotations
 

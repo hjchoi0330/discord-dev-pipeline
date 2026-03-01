@@ -1,307 +1,306 @@
 # Discord Dev Pipeline
 
-Discord **음성 채널** 대화를 실시간으로 녹음 및 전사하여 개발 관련 논의를 자동으로 감지하고,
-구현 계획을 생성한 뒤 Claude Code CLI로 자동 개발을 요청하는 시스템입니다.
+A system that records and transcribes Discord **voice channel** conversations in real time, automatically detects development-related discussions, generates implementation plans, and submits automated development requests to Claude Code CLI.
 
-## 시스템 아키텍처
+## System Architecture
 
 ```
-Discord 음성 채널
-    |   !join  -> 봇 입장, 녹음 시작
-    |   !leave -> 녹음 종료, 전사 시작
+Discord Voice Channel
+    |   !join  -> Bot joins, recording starts
+    |   !leave -> Recording stops, transcription begins
     v
-[collector/bot.py]          <- discord.py sinks로 각 화자별 오디오 캡처
-    |   faster-whisper (로컬 오픈소스 STT)
+[collector/bot.py]          <- Captures per-speaker audio via discord.py sinks
+    |   faster-whisper (local open-source STT)
     v  data/conversations/YYYY-MM-DD_guild_channel_voice.json
     |
-[analyzer/analyzer.py]      <- claude --print 로 개발 토픽 추출
+[analyzer/analyzer.py]      <- Extracts dev topics via claude --print
     |
     v  data/analysis/YYYY-MM-DD_analysis.json
     |
-[planner/planner.py]        <- claude --print 로 구현 계획 생성
+[planner/planner.py]        <- Generates implementation plans via claude --print
     |
     v  data/plans/YYYY-MM-DD_topic-title.md
     |
-[executor/executor.py]      <- claude --print 로 Claude Code에 구현 요청
+[executor/executor.py]      <- Submits implementation requests to Claude Code via claude --print
     |
-    v  data/result/<project-dir>/  (생성된 코드)
+    v  data/result/<project-dir>/  (generated code)
        data/executions/YYYY-MM-DD_execution_log.json
 ```
 
-> 모든 Claude 호출은 `claude --print` (Claude Code CLI)를 subprocess로 실행합니다.
-> Anthropic API 키는 필요 없으며, Claude Code에 로그인된 상태이면 됩니다.
+> All Claude invocations run `claude --print` (Claude Code CLI) as a subprocess.
+> No Anthropic API key is required — you only need to be logged in to Claude Code.
 
-## 사전 요구사항
+## Prerequisites
 
 - Python 3.11+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` 명령어가 PATH에 있어야 함, 로그인 완료 상태)
-- Discord 봇 토큰
-- ffmpeg (`discord.py[voice]`가 내부적으로 사용, `brew install ffmpeg`)
-- 약 460MB 디스크 (Whisper `small` 모델 최초 자동 다운로드)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` command must be on PATH, logged in)
+- Discord bot token
+- ffmpeg (used internally by `discord.py[voice]`, install with `brew install ffmpeg`)
+- ~460 MB disk space (Whisper `small` model is downloaded automatically on first run)
 
-## 설치
+## Installation
 
 ```bash
-# 저장소 클론
+# Clone the repository
 git clone <repo-url>
 cd discord-dev-pipeline
 
-# 가상환경 생성 (권장)
+# Create a virtual environment (recommended)
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# 의존성 설치 (discord.py[voice] + faster-whisper 포함)
+# Install dependencies (includes discord.py[voice] + faster-whisper)
 pip install -r requirements.txt
 
-# 환경변수 설정
-echo 'DISCORD_BOT_TOKEN=여기에_봇_토큰' > .env
+# Set environment variables
+echo 'DISCORD_BOT_TOKEN=your_bot_token_here' > .env
 
-# Claude Code CLI 로그인 확인
+# Verify Claude Code CLI installation
 claude --version
 ```
 
-## Discord 봇 설정
+## Discord Bot Setup
 
-1. [Discord Developer Portal](https://discord.com/developers/applications) 접속
-2. "New Application" 클릭 -> 이름 입력
-3. 좌측 메뉴 "Bot" -> "Reset Token" -> 토큰 복사 -> `.env`의 `DISCORD_BOT_TOKEN`에 입력
-4. **Privileged Gateway Intents** 3개 활성화:
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click "New Application" and enter a name
+3. Navigate to "Bot" in the left menu -> "Reset Token" -> copy the token -> paste it into `DISCORD_BOT_TOKEN` in `.env`
+4. Enable all 3 **Privileged Gateway Intents**:
    - Presence Intent
    - Server Members Intent
    - Message Content Intent
-5. 좌측 메뉴 "OAuth2" -> "URL Generator"
+5. Navigate to "OAuth2" -> "URL Generator" in the left menu
    - Scopes: `bot`
    - Bot Permissions:
-     - `Connect` (음성 채널 입장)
-     - `Speak` (음성 채널 발화)
+     - `Connect` (join voice channels)
+     - `Speak` (speak in voice channels)
      - `Use Voice Activity`
-     - `Send Messages` (텍스트 채널 결과 전송)
+     - `Send Messages` (send results to text channels)
      - `Read Message History`
-6. 생성된 URL로 봇을 서버에 초대
+6. Use the generated URL to invite the bot to your server
 
-## 사용법
+## Usage
 
-### 빠른 시작
+### Quick Start
 
 ```bash
-# 봇 시작
+# Start the bot
 python pipeline.py --bot
 ```
 
-Discord 텍스트 채널에서 명령어 입력:
+Enter commands in a Discord text channel:
 
 ```
-!join            -> 현재 입장한 음성 채널에 봇 참가 + 녹음 시작
-!join 개발채널    -> 특정 음성 채널 이름으로 입장
-!leave           -> 녹음 종료 + 자동 전사 + 파일 저장 (auto_pipeline 시 자동 분석)
-!status          -> 현재 녹음 경과 시간 확인
-!pipeline        -> 저장된 전사 파일로 분석 파이프라인 실행 (결과를 채널에 피드백)
+!join            -> Bot joins your current voice channel and starts recording
+!join dev-channel -> Bot joins a specific voice channel by name
+!leave           -> Stops recording + auto-transcribes + saves file (triggers auto pipeline if enabled)
+!status          -> Shows elapsed recording time
+!pipeline        -> Runs the analysis pipeline on saved transcription files (results posted to channel)
 ```
 
-### 전체 워크플로우
+### Full Workflow
 
 ```bash
-# 1) 봇 시작 (별도 터미널)
+# 1) Start the bot (separate terminal)
 python pipeline.py --bot
 
-# 2) Discord에서 음성 대화 후 녹음 저장
-#    !join -> 대화 -> !leave
+# 2) Have a voice conversation in Discord, then save the recording
+#    !join -> talk -> !leave
 
-# 3) 파이프라인 실행 (또는 Discord에서 !pipeline)
+# 3) Run the pipeline (or use !pipeline in Discord)
 python pipeline.py --run
 
-# 4) 특정 날짜로 실행
+# 4) Run for a specific date
 python pipeline.py --date 2026-03-01
 
-# 5) 이미 분석된 날짜도 강제 재분석
+# 5) Force re-analysis of an already-analyzed date
 python pipeline.py --date 2026-03-01 --force
 
-# 6) 분석만 실행 (계획 생성 없음)
+# 6) Run analysis only (no plan generation)
 python pipeline.py --analyze-only
 
-# 7) 시뮬레이션 (Claude Code 실행 안 함)
+# 7) Dry run (pipeline runs without executing Claude Code)
 python pipeline.py --dry-run --run
 ```
 
-### 대화형 메뉴
+### Interactive Menu
 
 ```bash
-python pipeline.py   # 인수 없이 실행 -> 대화형 메뉴
+python pipeline.py   # Run without arguments to launch the interactive menu
 ```
 
-### 데모 모드 (Claude CLI 없이 테스트)
+### Demo Mode (Test Without Claude CLI)
 
-Claude Code CLI 없이 파이프라인 전체 흐름을 시뮬레이션합니다:
+Simulates the full pipeline flow without requiring Claude Code CLI:
 
 ```bash
-# 구구단 시나리오 데모 (기본: 2026-03-01)
+# Run the multiplication table demo (default date: 2026-03-01)
 python run_demo.py
 
-# 특정 날짜 데모
+# Run demo for a specific date
 python run_demo.py 2026-02-28
 ```
 
-`run_demo.py`는 `_call_claude`를 mock으로 대체하여 분석 -> 계획 생성 -> (구구단일 경우) Go 파일 생성까지 실행합니다.
+`run_demo.py` replaces `_call_claude` with a mock, running the full flow from analysis -> plan generation -> (for multiplication table scenarios) Go file generation.
 
-## 파이프라인 동작 방식
+## How the Pipeline Works
 
-### 1. 음성 녹음 및 전사 (`collector/bot.py`)
+### 1. Voice Recording and Transcription (`collector/bot.py`)
 
-- `!join` 명령 시 봇이 음성 채널에 입장
-- `discord.sinks.WaveSink()`로 **화자별** 오디오를 분리 캡처
-- `!leave` 시 녹음 종료 -> [faster-whisper](https://github.com/SYSTRAN/faster-whisper)로 로컬 전사
-- 전사 결과를 `data/conversations/YYYY-MM-DD_서버명_채널명_voice.json`에 저장
-- 각 발화에 `author` 필드로 화자 이름이 자동 기록됨
-- `auto_pipeline: true` 설정 시 `!leave` 후 자동으로 파이프라인 실행 및 결과를 Discord 채널에 피드백
+- Bot joins the voice channel when `!join` is issued
+- Captures **per-speaker** audio streams separately using `discord.sinks.WaveSink()`
+- On `!leave`, recording stops -> local transcription via [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+- Transcription is saved to `data/conversations/YYYY-MM-DD_servername_channelname_voice.json`
+- Each utterance is automatically tagged with the speaker's name in the `author` field
+- When `auto_pipeline: true` is set, the pipeline runs automatically after `!leave` and posts results to the Discord channel
 
-### 2. 개발 토픽 분석 (`analyzer/analyzer.py`)
+### 2. Development Topic Analysis (`analyzer/analyzer.py`)
 
-- 저장된 전사 파일을 `claude --print`로 분석 (Claude Code CLI 세션 활용)
-- 기능 요청, 버그 리포트, 아키텍처 논의 등을 자동 감지
-- 실행 가능성(actionable), 우선순위(high/medium/low), 복잡도 평가
-- 날짜 경계 처리: 전날 23시에 시작된 대화도 놓치지 않도록 전날 파일 포함 탐색
-- 중복 방지: `source_files` 필드로 이미 분석된 파일은 자동 스킵 (`--force`로 재분석 가능)
-- 에러 내성: 손상된 대화 파일이나 Claude CLI 호출 실패 시 해당 항목만 건너뛰고 나머지 분석 계속
+- Analyzes saved transcription files using `claude --print` (via a Claude Code CLI session)
+- Automatically detects feature requests, bug reports, architecture discussions, and more
+- Evaluates actionability, priority (high/medium/low), and complexity
+- Date boundary handling: also searches the previous day's files to catch conversations that started late at night
+- Deduplication: files already analyzed are automatically skipped via the `source_files` field (`--force` to re-analyze)
+- Fault tolerance: if a conversation file is corrupted or a Claude CLI call fails, that item is skipped and analysis continues
 
-### 3. 계획 생성 (`planner/planner.py`)
+### 3. Plan Generation (`planner/planner.py`)
 
-- 각 개발 토픽별 상세 구현 계획 마크다운 파일 생성
-- `## Claude Code Prompt` 섹션에 바로 사용 가능한 프롬프트 포함
-- 우선순위 순(high -> medium -> low)으로 정렬
-- Claude CLI 호출 실패 시 해당 토픽만 건너뛰고 나머지 계획 생성 계속
+- Generates a detailed implementation plan Markdown file for each development topic
+- Includes a ready-to-use prompt in the `## Claude Code Prompt` section
+- Plans are sorted by priority (high -> medium -> low)
+- If a Claude CLI call fails, that topic is skipped and plan generation continues for the rest
 
-### 4. Claude Code 실행 (`executor/executor.py`)
+### 4. Claude Code Execution (`executor/executor.py`)
 
-- 각 계획 파일에서 `## Claude Code Prompt` 섹션의 프롬프트를 추출
-- `claude --print --dangerously-skip-permissions` 명령으로 Claude Code에 구현 요청
-- 개발 결과물은 `data/result/<프로젝트 디렉토리>/`에 저장 (plan 내용에서 프로젝트 디렉토리 자동 추출)
-- Claude CLI가 없으면 `data/pending_executions/`에 프롬프트를 저장하여 수동 실행 가능
-- 실행 로그는 `data/executions/YYYY-MM-DD_execution_log.json`에 기록
+- Extracts the prompt from the `## Claude Code Prompt` section of each plan file
+- Submits the implementation request to Claude Code via `claude --print --dangerously-skip-permissions`
+- Output is saved to `data/result/<project-directory>/` (project directory name is extracted from the plan)
+- If the Claude CLI is unavailable, prompts are saved to `data/pending_executions/` for manual execution
+- Execution logs are recorded in `data/executions/YYYY-MM-DD_execution_log.json`
 
-> `config.yaml`의 `pipeline.auto_execute: true` 설정 시 계획 생성 후 자동으로 Claude Code를 실행합니다.
-> 기본값은 `false`이며, 이 경우 계획 파일 생성까지만 자동 실행됩니다.
+> When `pipeline.auto_execute: true` is set in `config.yaml`, Claude Code is executed automatically after plan generation.
+> The default is `false`, in which case the pipeline stops after generating plan files.
 
-## 설정 (`config.yaml`)
+## Configuration (`config.yaml`)
 
 ```yaml
 discord:
-  token: ""                      # 환경변수 DISCORD_BOT_TOKEN 권장
+  token: ""                      # Prefer setting via DISCORD_BOT_TOKEN environment variable
 
 collector:
-  data_dir: "data/conversations" # 전사 파일 저장 경로 (DATA_DIR 환경변수로 오버라이드 가능)
+  data_dir: "data/conversations" # Transcription file storage path (overridable via DATA_DIR env var)
   whisper_model: "small"         # tiny | base | small | medium | large-v3
-  whisper_language: "ko"         # 전사 언어 (ko, en, ja, zh ...)
-  whisper_device: "cpu"          # cpu | cuda (GPU 가속)
+  whisper_language: "ko"         # Transcription language (ko, en, ja, zh ...)
+  whisper_device: "cpu"          # cpu | cuda (GPU acceleration)
   whisper_compute_type: "int8"   # int8 | float16 | float32
-  auto_pipeline: false           # true: !leave 후 자동으로 파이프라인 실행 + Discord 피드백
+  auto_pipeline: false           # true: auto-run pipeline after !leave + post results to Discord
 
-  monitored_voice_channels: []   # 빈 목록 = 모든 음성 채널
+  monitored_voice_channels: []   # Empty list = monitor all voice channels
   ignored_voice_channels:
     - "AFK"
 
 pipeline:
-  data_dir: "data"               # 데이터 루트 디렉토리
-  auto_execute: false            # true: 계획 생성 후 자동으로 Claude Code 실행
+  data_dir: "data"               # Root data directory
+  auto_execute: false            # true: auto-execute Claude Code after plan generation
 
 analyzer:
-  model: "claude-sonnet-4-6"     # 분석에 사용할 모델 (CLI 세션 통해 호출)
-  min_messages_for_topic: 3      # 토픽으로 인정할 최소 메시지 수
+  model: "claude-sonnet-4-6"     # Model to use for analysis (invoked via CLI session)
+  min_messages_for_topic: 3      # Minimum number of messages required to qualify as a topic
 
 planner:
   model: "claude-sonnet-4-6"
 
 executor:
-  claude_cli_path: "claude"      # claude CLI 바이너리 경로
-  timeout_seconds: 300           # Claude Code 실행 타임아웃 (초)
+  claude_cli_path: "claude"      # Path to the claude CLI binary
+  timeout_seconds: 300           # Claude Code execution timeout (seconds)
 ```
 
-### Whisper 모델 선택 가이드
+### Whisper Model Selection Guide
 
-| 모델 | 크기 | 속도 | 정확도 | 권장 환경 |
-|------|------|------|--------|-----------|
-| tiny | 75MB | 매우 빠름 | 낮음 | 빠른 테스트 |
-| base | 145MB | 빠름 | 보통 | CPU, 짧은 회의 |
-| **small** | **465MB** | **보통** | **좋음** | **기본값 (권장)** |
-| medium | 1.5GB | 느림 | 높음 | GPU 권장 |
-| large-v3 | 3GB | 매우 느림 | 최고 | GPU 필수 |
+| Model | Size | Speed | Accuracy | Recommended For |
+|-------|------|-------|----------|-----------------|
+| tiny | 75MB | Very fast | Low | Quick testing |
+| base | 145MB | Fast | Moderate | CPU, short meetings |
+| **small** | **465MB** | **Moderate** | **Good** | **Default (recommended)** |
+| medium | 1.5GB | Slow | High | GPU recommended |
+| large-v3 | 3GB | Very slow | Best | GPU required |
 
-## 디렉토리 구조
+## Directory Structure
 
 ```
 discord-dev-pipeline/
-├── collector/                    # Discord 음성 녹음 봇
-│   ├── bot.py                    # 음성 녹음 + Whisper 전사 + Discord 피드백
-│   └── config.py                 # 봇 및 Whisper 설정
-├── analyzer/                     # 전사 텍스트 분석
-│   └── analyzer.py               # claude --print 로 개발 토픽 추출
-├── planner/                      # 개발 계획 생성
-│   └── planner.py                # claude --print 로 마크다운 계획 생성
-├── executor/                     # Claude Code 실행
-│   └── executor.py               # claude --print 로 구현 요청
-├── shared/                       # 공통 모듈
-│   └── claude_cli.py             # Claude Code CLI 호출 래퍼
+├── collector/                    # Discord voice recording bot
+│   ├── bot.py                    # Voice recording + Whisper transcription + Discord feedback
+│   └── config.py                 # Bot and Whisper configuration
+├── analyzer/                     # Transcription text analysis
+│   └── analyzer.py               # Extracts dev topics via claude --print
+├── planner/                      # Development plan generation
+│   └── planner.py                # Generates Markdown plans via claude --print
+├── executor/                     # Claude Code execution
+│   └── executor.py               # Submits implementation requests via claude --print
+├── shared/                       # Shared modules
+│   └── claude_cli.py             # Claude Code CLI invocation wrapper
 ├── data/
-│   ├── conversations/            # 전사된 음성 대화 (JSON)
-│   ├── analysis/                 # 분석 결과
-│   ├── plans/                    # 생성된 개발 계획 (Markdown)
-│   ├── result/                   # 실행 결과물 (프로젝트별 디렉토리)
-│   ├── executions/               # 실행 로그
-│   └── pending_executions/       # claude CLI 없을 때 프롬프트 임시 저장
+│   ├── conversations/            # Transcribed voice conversations (JSON)
+│   ├── analysis/                 # Analysis results
+│   ├── plans/                    # Generated development plans (Markdown)
+│   ├── result/                   # Execution output (per-project directories)
+│   ├── executions/               # Execution logs
+│   └── pending_executions/       # Prompt staging area when claude CLI is unavailable
 ├── tests/
-│   ├── test_analyzer.py          # 분석기 단위 테스트 + 에러 핸들링
-│   ├── test_planner.py           # 계획 생성기 단위 테스트 + CLI 실패 처리
-│   ├── test_executor.py          # 실행기 단위 테스트
-│   ├── test_pipeline.py          # 파이프라인 통합 테스트
-│   ├── test_shared_claude_cli.py # Claude CLI 래퍼 테스트
-│   └── test_e2e_gugudan.py       # E2E 테스트 (구구단 시나리오)
-├── pipeline.py                   # 메인 오케스트레이터
-├── run_demo.py                   # 데모 실행기 (Claude CLI 없이 시뮬레이션)
-├── config.yaml                   # 설정 파일
-├── .env                          # 환경변수 (git 제외)
+│   ├── test_analyzer.py          # Analyzer unit tests + error handling
+│   ├── test_planner.py           # Planner unit tests + CLI failure handling
+│   ├── test_executor.py          # Executor unit tests
+│   ├── test_pipeline.py          # Pipeline integration tests
+│   ├── test_shared_claude_cli.py # Claude CLI wrapper tests
+│   └── test_e2e_gugudan.py       # E2E tests (multiplication table scenario)
+├── pipeline.py                   # Main orchestrator
+├── run_demo.py                   # Demo runner (simulates pipeline without Claude CLI)
+├── config.yaml                   # Configuration file
+├── .env                          # Environment variables (excluded from git)
 └── requirements.txt
 ```
 
-## 테스트
+## Tests
 
 ```bash
-# 전체 테스트 실행 (96개)
+# Run all tests (96 total)
 python -m pytest
 
-# 특정 모듈만
+# Run a specific module
 python -m pytest tests/test_analyzer.py
 python -m pytest tests/test_e2e_gugudan.py
 
-# 상세 출력
+# Verbose output
 python -m pytest -v
 ```
 
-테스트는 모든 Claude CLI 호출을 mock으로 대체하므로 Claude Code 설치 없이 실행 가능합니다.
+All tests mock Claude CLI calls, so no Claude Code installation is required to run them.
 
-## 문제 해결
+## Troubleshooting
 
-**봇이 음성 채널에 입장하지 못하는 경우**
-- Discord Developer Portal에서 `Connect`, `Speak` 권한 확인
-- 봇 초대 URL 재생성 후 재초대
-- Privileged Gateway Intents 3개 모두 활성화되었는지 확인
+**Bot cannot join voice channel**
+- Verify `Connect` and `Speak` permissions in the Discord Developer Portal
+- Regenerate the bot invite URL and re-invite the bot
+- Confirm all 3 Privileged Gateway Intents are enabled
 
-**전사 결과가 없거나 비어있는 경우**
-- `PyNaCl` 설치 확인: `pip install PyNaCl`
-- `ffmpeg` 설치 확인: `brew install ffmpeg` (macOS) / `apt install ffmpeg` (Ubuntu)
-- 음성 채널에 실제 발화가 있었는지 확인 (무음은 건너뜀)
-- `config.yaml`의 `whisper_language` 설정 확인
+**Transcription is missing or empty**
+- Check `PyNaCl` installation: `pip install PyNaCl`
+- Check `ffmpeg` installation: `brew install ffmpeg` (macOS) / `apt install ffmpeg` (Ubuntu)
+- Confirm there was actual speech in the voice channel (silence is skipped)
+- Verify `whisper_language` in `config.yaml`
 
-**Whisper 모델 다운로드가 느린 경우**
-- 최초 1회만 다운로드됨 (`~/.cache/huggingface/`에 캐시)
-- GPU 사용 시: `whisper_device: "cuda"`, `whisper_compute_type: "float16"`
-- 빠른 테스트가 목적이면: `whisper_model: "tiny"`
+**Whisper model download is slow**
+- The model is only downloaded once and cached at `~/.cache/huggingface/`
+- For GPU acceleration: set `whisper_device: "cuda"` and `whisper_compute_type: "float16"`
+- For quick testing: set `whisper_model: "tiny"`
 
-**`claude` 명령을 찾을 수 없는 경우**
-- Claude Code CLI 설치: https://docs.anthropic.com/en/docs/claude-code
-- `claude --version`으로 설치 확인
-- `config.yaml`의 `executor.claude_cli_path`에 전체 경로 지정 가능
-- CLI 없이 테스트하려면: `python run_demo.py`
+**`claude` command not found**
+- Install Claude Code CLI: https://docs.anthropic.com/en/docs/claude-code
+- Verify installation with `claude --version`
+- You can specify the full path in `config.yaml` under `executor.claude_cli_path`
+- To test without the CLI: `python run_demo.py`
 
-**이미 분석된 파일이 재분석되는 경우**
-- `--force` 플래그 없이 실행하면 이전에 분석된 파일은 자동으로 스킵됩니다
-- `data/analysis/YYYY-MM-DD_analysis.json`의 `source_files` 필드로 추적
-- 강제 재분석이 필요하면: `python pipeline.py --date YYYY-MM-DD --force`
+**Already-analyzed files are being re-analyzed**
+- Without the `--force` flag, previously analyzed files are automatically skipped
+- Tracking is done via the `source_files` field in `data/analysis/YYYY-MM-DD_analysis.json`
+- To force re-analysis: `python pipeline.py --date YYYY-MM-DD --force`

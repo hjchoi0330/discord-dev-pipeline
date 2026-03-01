@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Discord Dev Pipeline - 메인 오케스트레이터.
+"""Discord Dev Pipeline - Main orchestrator.
 
-데이터 흐름:
-  Discord 대화 수집 → 개발 토픽 분석 → 계획 생성 → Claude Code 실행
+Data flow:
+  Collect Discord conversations → Analyze dev topics → Generate plans → Execute with Claude Code
 """
 
 from __future__ import annotations
@@ -10,11 +10,10 @@ from __future__ import annotations
 import argparse
 import json as _json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-import os
 
 import yaml
 from dotenv import load_dotenv
@@ -69,10 +68,10 @@ def _load_config() -> dict:
 
 
 def _find_conversation_files(date: str) -> list[Path]:
-    """날짜에 해당하는 대화 파일을 탐색합니다.
+    """Search for conversation files matching the given date.
 
-    날짜 경계를 넘는 대화를 놓치지 않기 위해 전날 파일도 함께 포함합니다.
-    (예: 23시에 시작된 녹음이 다음 날 01시에 종료된 경우)
+    Also includes files from the previous day to avoid missing conversations
+    that span a date boundary (e.g., a recording started at 23:00 and ended at 01:00 the next day).
     """
     conv_dir = _DATA_DIR / "conversations"
     if not conv_dir.exists():
@@ -155,17 +154,17 @@ def run_pipeline(
     force: bool = False,
     auto_execute: bool | None = None,
 ) -> None:
-    """전체 파이프라인을 실행합니다.
+    """Run the full pipeline.
 
-    각 stage의 진행 상태를 PipelineRun으로 추적하여
-    data/pipeline_runs/ 에 이력을 저장합니다.
+    Tracks progress of each stage with PipelineRun and saves the run history
+    to data/pipeline_runs/.
 
     Args:
-        date: 분석할 날짜 (YYYY-MM-DD). None이면 오늘 날짜.
-        dry_run: True이면 Claude Code를 실제로 실행하지 않음.
-        force: True이면 이미 분석된 날짜도 재분석.
-        auto_execute: True이면 계획 실행을 강제 활성화.
-            None이면 config.yaml의 pipeline.auto_execute 값을 사용.
+        date: Date to analyze (YYYY-MM-DD). Defaults to today if None.
+        dry_run: If True, skips actual Claude Code execution.
+        force: If True, re-analyzes even dates that have already been analyzed.
+        auto_execute: If True, forces plan execution to be enabled.
+            If None, uses the pipeline.auto_execute value from config.yaml.
     """
     from analyzer.analyzer import analyze_conversations
     from planner.planner import generate_plans
@@ -179,7 +178,7 @@ def run_pipeline(
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     run = PipelineRun.create(date, config={"dry_run": dry_run, "force": force, **pipeline_cfg})
-    logger.info("=== Discord Dev Pipeline 시작 (날짜: %s, run: %s) ===", date, run.run_id)
+    logger.info("=== Discord Dev Pipeline started (date: %s, run: %s) ===", date, run.run_id)
 
     try:
         # ── Stage 1: Collect ─────────────────────────────────────────
@@ -188,8 +187,8 @@ def run_pipeline(
 
         conv_files = _find_conversation_files(date)
         if not conv_files:
-            collect_stage.fail("날짜에 해당하는 대화 파일 없음")
-            logger.warning("날짜 %s에 해당하는 대화 파일이 없습니다.", date)
+            collect_stage.fail("No conversation files found for the given date")
+            logger.warning("No conversation files found for date %s.", date)
             run.get_stage(STAGE_ANALYZE).skip("No input files")
             run.get_stage(STAGE_PLAN).skip("No input files")
             run.get_stage(STAGE_EXECUTE).skip("No input files")
@@ -218,7 +217,7 @@ def run_pipeline(
                         new_files.append(f)
 
                 if not new_files:
-                    logger.info("모든 대화 파일이 이미 분석되었습니다. 캐시된 분석을 사용합니다.")
+                    logger.info("All conversation files have already been analyzed. Using cached analysis.")
                     analysis = _load_existing_analysis(date)
                     if analysis:
                         analyze_stage.complete({
@@ -226,18 +225,18 @@ def run_pipeline(
                             "topics_found": analysis.dev_topics_found,
                         })
                     else:
-                        analyze_stage.fail("캐시된 분석 파일 로드 실패")
+                        analyze_stage.fail("Failed to load cached analysis file")
                 else:
                     skipped = len(conv_files) - len(new_files)
                     if skipped > 0:
-                        logger.info("이미 분석된 파일 %d개 스킵, 새 파일 %d개 분석 예정", skipped, len(new_files))
+                        logger.info("Skipping %d already-analyzed file(s), %d new file(s) to analyze", skipped, len(new_files))
                     conv_files = new_files
 
         if analysis is None and analyze_stage.status != "failed":
-            logger.info("분석할 대화 파일 %d개:", len(conv_files))
+            logger.info("Conversation files to analyze: %d", len(conv_files))
             for f in conv_files:
                 logger.info("  - %s", f)
-            logger.info("대화 파일 분석 중...")
+            logger.info("Analyzing conversation files...")
             analysis = analyze_conversations(conv_files, date, data_dir=_DATA_DIR)
             analyze_stage.complete({
                 "source": "fresh",
@@ -247,12 +246,12 @@ def run_pipeline(
 
         if analysis is None or not analysis.dev_topics:
             if analyze_stage.status != "failed":
-                logger.info("개발 관련 토픽이 발견되지 않았습니다.")
+                logger.info("No development-related topics found.")
             run.get_stage(STAGE_PLAN).skip("No dev topics found")
             run.get_stage(STAGE_EXECUTE).skip("No dev topics found")
             return
 
-        logger.info("발견된 개발 토픽 %d개:", analysis.dev_topics_found)
+        logger.info("Development topics found: %d", analysis.dev_topics_found)
         for topic in analysis.dev_topics:
             actionable_mark = "O" if topic.actionable else "x"
             logger.info("  [%s] [%s] %s", actionable_mark, topic.priority.upper(), topic.title)
@@ -270,7 +269,7 @@ def run_pipeline(
         })
 
         if plan_files:
-            logger.info("생성된 계획 파일 %d개:", len(plan_files))
+            logger.info("Plan files generated: %d", len(plan_files))
             for p in plan_files:
                 logger.info("  - %s", p)
 
@@ -279,16 +278,16 @@ def run_pipeline(
 
         if not plan_files:
             execute_stage.skip("No new plans to execute")
-            logger.info("실행할 새 계획이 없습니다.")
+            logger.info("No new plans to execute.")
         elif dry_run:
             execute_stage.skip("Dry run mode")
-            logger.info("[DRY RUN] 계획 실행을 건너뜁니다.")
+            logger.info("[DRY RUN] Skipping plan execution.")
         elif not (auto_execute if auto_execute is not None else pipeline_cfg.get("auto_execute", False)):
             execute_stage.skip("auto_execute disabled")
-            logger.info("자동 실행이 비활성화 상태입니다. config.yaml의 pipeline.auto_execute를 true로 설정하세요.")
+            logger.info("Auto-execute is disabled. Set pipeline.auto_execute to true in config.yaml.")
         else:
             execute_stage.start({"plans_to_execute": len(plan_files)})
-            logger.info("Claude Code로 계획 실행 중...")
+            logger.info("Executing plans with Claude Code...")
             results = execute_plans(
                 plan_files,
                 dry_run=dry_run,
@@ -310,12 +309,12 @@ def run_pipeline(
 
 
 def _print_run_summary(run: PipelineRun) -> None:
-    """파이프라인 실행 결과를 stage별로 출력합니다."""
-    logger.info("=== Pipeline Run 요약 (%s) ===", run.run_id)
-    logger.info("날짜: %s | 상태: %s", run.date, run.status)
+    """Print the pipeline run result broken down by stage."""
+    logger.info("=== Pipeline Run Summary (%s) ===", run.run_id)
+    logger.info("Date: %s | Status: %s", run.date, run.status)
     duration = run.duration_seconds()
     if duration is not None:
-        logger.info("총 소요 시간: %.1f초", duration)
+        logger.info("Total duration: %.1fs", duration)
     for stage in run.stages:
         marks = {"completed": "O", "failed": "X", "skipped": "-", "pending": "?", "running": "~"}
         mark = marks.get(stage.status, "?")
@@ -334,32 +333,20 @@ def _print_run_summary(run: PipelineRun) -> None:
     logger.info("=== %s ===", run.summary_line())
 
 
-def _print_summary(results) -> None:
-    """이전 버전과의 호환을 위해 유지합니다."""
-    succeeded = sum(1 for r in results if r.success)
-    logger.info("=== 실행 결과 요약 ===")
-    logger.info("성공: %d / 전체: %d", succeeded, len(results))
-    for r in results:
-        status = "O" if r.success else "X"
-        logger.info("  [%s] %s", status, Path(r.plan_file).name)
-        if not r.success and r.error:
-            logger.error("      오류: %s", r.error[:200])
-
-
 def show_history(date: str | None = None) -> None:
-    """파이프라인 실행 이력을 출력합니다."""
+    """Print the pipeline run history."""
     runs = load_runs(_DATA_DIR, date=date)
     if not runs:
-        label = f"날짜 {date}" if date else "전체"
-        print(f"\n{label} 파이프라인 실행 이력이 없습니다.")
+        label = f"date {date}" if date else "all"
+        print(f"\nNo pipeline run history found ({label}).")
         return
 
-    print(f"\n=== Pipeline 실행 이력 ({len(runs)}건) ===")
+    print(f"\n=== Pipeline Run History ({len(runs)} run(s)) ===")
     for run in runs:
         print(f"\n{run.summary_line()}")
         duration = run.duration_seconds()
         if duration is not None:
-            print(f"  소요: {duration:.1f}초")
+            print(f"  Duration: {duration:.1f}s")
         for stage in run.stages:
             marks = {"completed": "O", "failed": "X", "skipped": "-", "pending": "?"}
             mark = marks.get(stage.status, "?")
@@ -375,93 +362,93 @@ def show_history(date: str | None = None) -> None:
 
 
 def run_interactive() -> None:
-    """대화형 CLI 메뉴."""
+    """Interactive CLI menu."""
     from executor.executor import execute_plan
 
     print("\n=== Discord Dev Pipeline ===")
     while True:
-        print("\n메뉴:")
-        print("  1. 오늘 날짜로 전체 파이프라인 실행")
-        print("  2. 특정 날짜로 파이프라인 실행")
-        print("  3. 분석만 실행 (계획 생성 없음)")
-        print("  4. 기존 계획 파일 목록 보기")
-        print("  5. 특정 계획 파일 실행")
-        print("  6. 파이프라인 실행 이력 보기")
-        print("  7. Discord 봇 시작")
-        print("  0. 종료")
+        print("\nMenu:")
+        print("  1. Run full pipeline for today")
+        print("  2. Run pipeline for a specific date")
+        print("  3. Run analysis only (no plan generation)")
+        print("  4. List existing plan files")
+        print("  5. Execute a specific plan file")
+        print("  6. View pipeline run history")
+        print("  7. Start Discord bot")
+        print("  0. Exit")
 
-        choice = input("\n선택: ").strip()
+        choice = input("\nChoice: ").strip()
 
         if choice == "1":
             run_pipeline()
         elif choice == "2":
-            date = input("날짜 입력 (YYYY-MM-DD): ").strip()
+            date = input("Enter date (YYYY-MM-DD): ").strip()
             run_pipeline(date=date)
         elif choice == "3":
             from analyzer.analyzer import analyze_conversations
             date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             files = _find_conversation_files(date)
             if not files:
-                print(f"날짜 {date}에 대화 파일이 없습니다.")
+                print(f"No conversation files found for date {date}.")
             else:
                 result = analyze_conversations(files, date)
-                print(f"\n분석 완료: {result.dev_topics_found}개 토픽 발견")
+                print(f"\nAnalysis complete: {result.dev_topics_found} topic(s) found")
         elif choice == "4":
             plan_dir = _DATA_DIR / "plans"
             if plan_dir.exists():
                 plans = sorted(plan_dir.glob("*.md"))
                 if plans:
-                    print(f"\n계획 파일 {len(plans)}개:")
+                    print(f"\n{len(plans)} plan file(s):")
                     for i, p in enumerate(plans, 1):
                         print(f"  {i}. {p.name}")
                 else:
-                    print("계획 파일이 없습니다.")
+                    print("No plan files found.")
             else:
-                print("계획 디렉토리가 없습니다.")
+                print("Plans directory does not exist.")
         elif choice == "5":
             plan_dir = _DATA_DIR / "plans"
             plans = sorted(plan_dir.glob("*.md")) if plan_dir.exists() else []
             if not plans:
-                print("계획 파일이 없습니다.")
+                print("No plan files found.")
             else:
-                print(f"\n계획 파일 {len(plans)}개:")
+                print(f"\n{len(plans)} plan file(s):")
                 for i, p in enumerate(plans, 1):
                     print(f"  {i}. {p.name}")
-                idx = input("\n실행할 번호 (0=취소): ").strip()
+                idx = input("\nEnter number to execute (0=cancel): ").strip()
                 if idx.isdigit() and 1 <= int(idx) <= len(plans):
                     plan = plans[int(idx) - 1]
-                    print(f"\n계획 실행 중: {plan.name}")
+                    print(f"\nExecuting plan: {plan.name}")
                     result = execute_plan(plan, data_dir=_DATA_DIR)
-                    status = "성공" if result.success else f"실패: {result.error[:200]}"
-                    print(f"결과: {status}")
+                    status = "Success" if result.success else f"Failed: {result.error[:200]}"
+                    print(f"Result: {status}")
                 elif idx != "0":
-                    print("잘못된 번호입니다.")
+                    print("Invalid number.")
         elif choice == "6":
-            date_input = input("날짜 필터 (YYYY-MM-DD, 빈 값=전체): ").strip() or None
+            date_input = input("Date filter (YYYY-MM-DD, leave blank for all): ").strip() or None
             show_history(date=date_input)
         elif choice == "7":
             from collector.bot import run
-            print("Discord 봇을 시작합니다... (Ctrl+C로 종료)")
+            print("Starting Discord bot... (Press Ctrl+C to stop)")
             run()
         elif choice == "0":
-            print("종료합니다.")
+            print("Exiting.")
             break
         else:
-            print("잘못된 선택입니다.")
+            print("Invalid choice.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Discord Dev Pipeline - Discord 대화에서 개발 계획을 자동으로 생성하고 실행합니다."
+        description="Discord Dev Pipeline - Automatically generates and executes development plans from Discord conversations."
     )
-    parser.add_argument("--run", action="store_true", help="오늘 날짜로 파이프라인 실행")
-    parser.add_argument("--date", metavar="YYYY-MM-DD", help="특정 날짜로 파이프라인 실행")
-    parser.add_argument("--analyze-only", action="store_true", help="분석만 실행 (계획/실행 없음)")
-    parser.add_argument("--dry-run", action="store_true", help="실제 Claude Code 실행 없이 시뮬레이션")
-    parser.add_argument("--force", action="store_true", help="이미 분석된 날짜도 재분석")
-    parser.add_argument("--auto-execute", action="store_true", help="계획 실행을 강제 활성화 (config.yaml 무시)")
-    parser.add_argument("--history", action="store_true", help="파이프라인 실행 이력 조회")
-    parser.add_argument("--bot", action="store_true", help="Discord 봇만 시작")
+    parser.add_argument("--run", action="store_true", help="Run the pipeline for today")
+    parser.add_argument("--date", metavar="YYYY-MM-DD", help="Run the pipeline for a specific date")
+    parser.add_argument("--analyze-only", action="store_true", help="Run analysis only (no plan generation or execution)")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate without actually running Claude Code")
+    parser.add_argument("--force", action="store_true", help="Re-analyze even dates that have already been analyzed")
+    parser.add_argument("--auto-execute", action="store_true", help="Force plan execution to be enabled (overrides config.yaml)")
+    parser.add_argument("--history", action="store_true", help="Show pipeline run history")
+    parser.add_argument("--bot", action="store_true", help="Start the Discord bot only")
     args = parser.parse_args()
 
     if args.history:
@@ -478,10 +465,10 @@ def main() -> None:
         date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         files = _find_conversation_files(date)
         if not files:
-            logger.error("날짜 %s에 대화 파일이 없습니다.", date)
+            logger.error("No conversation files found for date %s.", date)
             sys.exit(1)
         result = analyze_conversations(files, date)
-        logger.info("분석 완료: %d개 토픽 발견", result.dev_topics_found)
+        logger.info("Analysis complete: %d topic(s) found", result.dev_topics_found)
         return
 
     if args.run or args.date:
@@ -493,7 +480,7 @@ def main() -> None:
         )
         return
 
-    # 인수 없으면 대화형 모드
+    # No arguments provided — fall back to interactive mode
     run_interactive()
 
 

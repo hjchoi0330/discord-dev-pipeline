@@ -1,4 +1,4 @@
-"""Discord 대화 파일을 분석하여 개발 관련 토픽을 추출합니다."""
+"""Analyzes Discord conversation files to extract development-related topics."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ IMPORTANT GUIDELINES:
 - When in doubt, mark a topic as actionable. It is better to capture a borderline topic than to miss a real one.
 
 For each dev topic found, provide:
-- title: concise English title (under 60 chars, e.g. "Add Docker Health Check" not "Docker 헬스체크 추가")
+- title: concise English title (under 60 chars, e.g. "Add Docker Health Check" not "Add Docker Health Check in Korean")
 - category: one of [feature, bug, refactor, infrastructure, discussion]
 - priority: one of [high, medium, low]
 - summary: 2-3 sentences in English explaining what was discussed and why it matters
@@ -105,22 +105,22 @@ _MAX_CHARS_PER_CHUNK = 8000
 
 
 def _load_conversation_file(path: Path) -> dict:
-    """대화 파일을 JSON으로 로드합니다. 파일이 없거나 파싱 실패 시 빈 dict 반환."""
+    """Load a conversation file as JSON. Returns an empty dict if file is missing or parsing fails."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
             if not isinstance(data, dict):
-                logger.warning("대화 파일이 dict가 아닙니다: %s", path)
+                logger.warning("Conversation file is not a dict: %s", path)
                 return {}
             return data
     except FileNotFoundError:
-        logger.error("대화 파일을 찾을 수 없습니다: %s", path)
+        logger.error("Conversation file not found: %s", path)
         return {}
     except json.JSONDecodeError as e:
-        logger.error("대화 파일 JSON 파싱 실패: %s (%s)", path, e)
+        logger.error("Failed to parse conversation file as JSON: %s (%s)", path, e)
         return {}
     except OSError as e:
-        logger.error("대화 파일 읽기 실패: %s (%s)", path, e)
+        logger.error("Failed to read conversation file: %s (%s)", path, e)
         return {}
 
 
@@ -133,7 +133,7 @@ def _format_messages_for_prompt(messages: list[dict]) -> str:
 
 
 def _chunk_messages(messages: list[dict]) -> list[list[dict]]:
-    """긴 대화를 분석 가능한 청크로 분할합니다."""
+    """Split a long conversation into analyzable chunks."""
     chunks: list[list[dict]] = []
     current: list[dict] = []
     current_chars = 0
@@ -156,8 +156,8 @@ def _chunk_messages(messages: list[dict]) -> list[list[dict]]:
 
 
 def _parse_claude_response(response_text: str) -> list[dict]:
-    """Claude 응답에서 JSON을 파싱합니다."""
-    # JSON 블록만 추출 (마크다운 코드 펜스 처리)
+    """Parse JSON from a Claude response."""
+    # Extract only the JSON block (handle markdown code fences)
     match = re.search(r"\{[\s\S]*\}", response_text)
     if not match:
         return []
@@ -169,7 +169,7 @@ def _parse_claude_response(response_text: str) -> list[dict]:
 
 
 def _deduplicate_topics(topics: list[DevTopic]) -> list[DevTopic]:
-    """유사한 제목의 토픽을 중복 제거합니다."""
+    """Remove duplicate topics with similar titles."""
     seen_titles: set[str] = set()
     result: list[DevTopic] = []
     for topic in topics:
@@ -181,15 +181,15 @@ def _deduplicate_topics(topics: list[DevTopic]) -> list[DevTopic]:
 
 
 def analyze_conversations(files: list[Path], date: str, data_dir: Path | None = None) -> AnalysisResult:
-    """대화 파일들을 분석하여 개발 토픽을 추출합니다.
+    """Analyze conversation files to extract development topics.
 
     Args:
-        files: 분석할 대화 JSON 파일 목록
-        date: 분석 날짜 (YYYY-MM-DD)
-        data_dir: 데이터 루트 디렉토리. None이면 Path("data") 사용.
+        files: List of conversation JSON files to analyze.
+        date: Analysis date (YYYY-MM-DD).
+        data_dir: Root data directory. Defaults to Path("data") if None.
 
     Returns:
-        AnalysisResult: 추출된 개발 토픽 포함 분석 결과
+        AnalysisResult: Analysis result containing extracted development topics.
     """
     all_topics: list[DevTopic] = []
     source_files: list[str] = []
@@ -202,7 +202,7 @@ def analyze_conversations(files: list[Path], date: str, data_dir: Path | None = 
         messages: list[dict] = data.get("messages", [])
         total_messages += len(messages)
 
-        # 내용 없는 메시지 제거 (봇 메시지, 빈 메시지 등)
+        # Remove messages with no content (bot messages, empty messages, etc.)
         messages = [m for m in messages if m.get("content", "").strip()]
 
         for chunk in _chunk_messages(messages):
@@ -212,7 +212,7 @@ def analyze_conversations(files: list[Path], date: str, data_dir: Path | None = 
             try:
                 response_text = _call_claude(prompt)
             except Exception as e:
-                logger.error("Claude CLI 호출 실패 (파일: %s): %s", conv_file.name, e)
+                logger.error("Claude CLI call failed (file: %s): %s", conv_file.name, e)
                 continue
             raw_topics = _parse_claude_response(response_text)
 
@@ -252,7 +252,7 @@ def analyze_conversations(files: list[Path], date: str, data_dir: Path | None = 
         dev_topics_found=len(unique_topics),
     )
 
-    # 분석 결과 저장
+    # Save analysis result
     if data_dir is None:
         data_dir = Path("data")
     analysis_dir = data_dir / "analysis"
@@ -267,5 +267,5 @@ def analyze_conversations(files: list[Path], date: str, data_dir: Path | None = 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result.__dict__, f, ensure_ascii=False, indent=2, default=_serialize)
 
-    logger.info("분석 완료: %d개 토픽 발견 → %s", len(unique_topics), output_path)
+    logger.info("Analysis complete: %d topic(s) found -> %s", len(unique_topics), output_path)
     return result

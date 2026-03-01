@@ -1,4 +1,4 @@
-"""executor 모듈 단위 테스트."""
+"""Unit tests for the executor module."""
 
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ class TestExecutionResult:
             plan_file="p.md", prompt_used="", claude_output="",
             success=False, error="err",
         )
-        assert r.timestamp  # 기본값이 자동 생성됨
+        assert r.timestamp  # default value is auto-generated
 
 
 # ── execute_plan ─────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ class TestExecutePlan:
         result = execute_plan(plan, data_dir=tmp_path / "data")
         assert not result.success
         assert "not found" in result.error
-        # pending 파일 확인
+        # verify pending file
         pending_dir = tmp_path / "data" / "pending_executions"
         assert pending_dir.exists()
         pending_files = list(pending_dir.glob("*.txt"))

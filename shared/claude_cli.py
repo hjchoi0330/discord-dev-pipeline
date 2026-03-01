@@ -1,4 +1,4 @@
-"""Claude Code CLI 호출 공통 모듈."""
+"""Common module for invoking the Claude Code CLI."""
 import logging
 import os
 import subprocess
@@ -7,10 +7,10 @@ logger = logging.getLogger(__name__)
 
 
 def clean_env() -> dict[str, str]:
-    """Claude Code 관련 환경변수를 모두 제거한 깨끗한 env를 반환합니다.
+    """Return a clean environment dict with all Claude Code-related variables removed.
 
-    Claude Code가 실행 중일 때 설정되는 환경변수(CLAUDECODE, CLAUDE_CODE_*,
-    CLAUDE_AGENT_* 등)를 제거하여 nested session 감지를 방지합니다.
+    Strips environment variables set when Claude Code is running (CLAUDECODE,
+    CLAUDE_CODE_*, CLAUDE_AGENT_*, etc.) to prevent nested session detection.
     """
     return {
         k: v for k, v in os.environ.items()
@@ -19,18 +19,18 @@ def clean_env() -> dict[str, str]:
 
 
 def call_claude(prompt: str, timeout: int = 120) -> str:
-    """Claude Code CLI를 subprocess로 호출합니다 (API 키 불필요).
+    """Invoke the Claude Code CLI via subprocess (no API key required).
 
     Args:
-        prompt: Claude에 전달할 프롬프트 텍스트.
-        timeout: subprocess 타임아웃 (초).
+        prompt: Prompt text to pass to Claude.
+        timeout: Subprocess timeout in seconds.
 
     Returns:
-        Claude의 응답 텍스트.
+        Response text from Claude.
 
     Raises:
-        RuntimeError: Claude CLI가 비정상 종료하거나 찾을 수 없는 경우.
-        subprocess.TimeoutExpired: 타임아웃 초과.
+        RuntimeError: If the Claude CLI exits with a non-zero code or is not found.
+        subprocess.TimeoutExpired: If the subprocess times out.
     """
     env = clean_env()
     try:
@@ -44,17 +44,17 @@ def call_claude(prompt: str, timeout: int = 120) -> str:
         )
     except FileNotFoundError:
         raise RuntimeError(
-            "claude CLI를 찾을 수 없습니다. Claude Code가 설치되어 있는지 확인하세요. "
+            "claude CLI not found. Please verify that Claude Code is installed. "
             "(https://docs.anthropic.com/en/docs/claude-code)"
         )
     if result.returncode != 0:
-        # stderr가 비어있을 수 있으므로 stdout도 함께 로깅
+        # stderr may be empty, so log stdout as well
         error_detail = result.stderr.strip() or result.stdout.strip()
         logger.error(
-            "Claude CLI 비정상 종료 (코드 %d): %s",
+            "Claude CLI exited abnormally (code %d): %s",
             result.returncode, error_detail[:300],
         )
         raise RuntimeError(
-            f"claude CLI 오류 (코드 {result.returncode}): {error_detail[:500]}"
+            f"claude CLI error (code {result.returncode}): {error_detail[:500]}"
         )
     return result.stdout

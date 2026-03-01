@@ -1,4 +1,4 @@
-"""analyzer 모듈 단위 테스트."""
+"""Unit tests for the analyzer module."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ class TestChunkMessages:
         assert len(chunks) >= 3  # 250 / 100 = 2.5 → 3 chunks
 
     def test_split_by_char_limit(self):
-        # 각 메시지가 5000자 → 2개면 10000자 > 8000 한도
+        # Each message is 5000 chars -> 2 messages = 10000 chars > 8000 limit
         messages = [{"content": "a" * 5000} for _ in range(3)]
         chunks = _chunk_messages(messages)
         assert len(chunks) >= 2
@@ -148,7 +148,7 @@ class TestDeduplicateTopics:
         assert _deduplicate_topics([]) == []
 
 
-# ── analyze_conversations (통합, mock) ───────────────────────────────
+# ── analyze_conversations (integration, mock) ────────────────────────
 
 
 class TestAnalyzeConversations:
@@ -208,7 +208,7 @@ class TestAnalyzeConversations:
 
     @patch("analyzer.analyzer._call_claude")
     def test_non_dev_conversation_returns_no_topics(self, mock_claude, tmp_path, monkeypatch):
-        """개발과 무관한 대화(점심, 회식, 등산 등)는 토픽 0개를 반환해야 한다."""
+        """Conversations unrelated to development (lunch, team dinner, hiking, etc.) should return 0 topics."""
         monkeypatch.chdir(tmp_path)
         conv = self._make_conv_file(tmp_path, "random.json", [
             {"author": "김민수", "timestamp": "2026-02-28T12:01:00Z", "content": "다들 점심 뭐 먹었어? 라멘집 갔는데 맛있더라."},
@@ -227,7 +227,7 @@ class TestAnalyzeConversations:
 
     @patch("analyzer.analyzer._call_claude")
     def test_mixed_dev_and_non_dev_files(self, mock_claude, tmp_path, monkeypatch):
-        """개발 대화와 비개발 대화가 섞여 있을 때 개발 토픽만 추출해야 한다."""
+        """When dev and non-dev conversations are mixed, only dev topics should be extracted."""
         monkeypatch.chdir(tmp_path)
         dev_conv = self._make_conv_file(tmp_path, "general.json", [
             {"author": "alice", "timestamp": "2026-01-01T10:00:00Z", "content": "Docker 컨테이너가 OOM으로 죽어"},
@@ -264,9 +264,9 @@ class TestAnalyzeConversations:
 
     @patch("analyzer.analyzer._call_claude")
     def test_dev_talk_in_random_channel_detected(self, mock_claude, tmp_path, monkeypatch):
-        """random 채널이라도 개발 관련 대화가 있으면 토픽이 추출되어야 한다."""
+        """Even in a random channel, dev-related conversation should produce extracted topics."""
         monkeypatch.chdir(tmp_path)
-        # 파일명은 random 채널이지만, 내용에 개발 대화가 포함됨
+        # Filename indicates a random channel, but content contains dev discussion
         conv = self._make_conv_file(tmp_path, "2026-01-01_server_random.json", [
             {"author": "김민수", "timestamp": "2026-01-01T14:00:00Z", "content": "점심 맛있었어?"},
             {"author": "이지영", "timestamp": "2026-01-01T14:01:00Z", "content": "응 근데 아까 Redis 캐시 만료 이슈 봤어?"},
@@ -289,11 +289,11 @@ class TestAnalyzeConversations:
 
         assert result.dev_topics_found == 1
         assert result.dev_topics[0].title == "Redis 캐시 TTL 설정 오류 수정"
-        # 채널명이 아닌 내용 기반 분석임을 확인
+        # Confirm analysis is content-based, not channel-name-based
         assert "random" in result.source_files[0]
 
 
-# ── _load_conversation_file (에러 핸들링) ────────────────────────────
+# ── _load_conversation_file (error handling) ─────────────────────────
 
 
 class TestLoadConversationFile:
@@ -326,7 +326,7 @@ class TestLoadConversationFile:
         assert result == {}
 
 
-# ── analyze_conversations: Claude CLI 실패 시 graceful skip ──────────
+# ── analyze_conversations: graceful skip on Claude CLI failure ────────
 
 
 class TestAnalyzeConversationsCLIFailure:
@@ -337,7 +337,7 @@ class TestAnalyzeConversationsCLIFailure:
 
     @patch("analyzer.analyzer._call_claude")
     def test_claude_failure_skips_chunk(self, mock_claude, tmp_path, monkeypatch):
-        """Claude CLI 호출이 실패해도 전체 분석이 중단되지 않아야 한다."""
+        """A Claude CLI call failure should not abort the entire analysis."""
         monkeypatch.chdir(tmp_path)
         conv = self._make_conv_file(tmp_path, "conv.json", [
             {"author": "alice", "timestamp": "2026-01-01T10:00:00Z", "content": "need auth"},
@@ -351,7 +351,7 @@ class TestAnalyzeConversationsCLIFailure:
 
     @patch("analyzer.analyzer._call_claude")
     def test_claude_timeout_skips_chunk(self, mock_claude, tmp_path, monkeypatch):
-        """Claude CLI 타임아웃이 발생해도 전체 분석이 중단되지 않아야 한다."""
+        """A Claude CLI timeout should not abort the entire analysis."""
         import subprocess
         monkeypatch.chdir(tmp_path)
         conv = self._make_conv_file(tmp_path, "conv.json", [
@@ -365,7 +365,7 @@ class TestAnalyzeConversationsCLIFailure:
 
     @patch("analyzer.analyzer._call_claude")
     def test_corrupt_file_skipped_gracefully(self, mock_claude, tmp_path, monkeypatch):
-        """손상된 대화 파일은 건너뛰고 나머지 파일은 정상 분석되어야 한다."""
+        """Corrupt conversation files should be skipped while remaining files are analyzed normally."""
         monkeypatch.chdir(tmp_path)
         bad_file = tmp_path / "bad.json"
         bad_file.write_text("NOT JSON", encoding="utf-8")
@@ -380,6 +380,6 @@ class TestAnalyzeConversationsCLIFailure:
 
         result = analyze_conversations([bad_file, good_file], "2026-01-01")
 
-        # bad_file은 빈 dict 반환 → messages 0개, good_file만 분석됨
+        # bad_file returns empty dict -> 0 messages, only good_file is analyzed
         assert result.dev_topics_found == 1
         assert result.dev_topics[0].title == "Fix Bug"
