@@ -592,6 +592,8 @@ class VoiceBot(commands.Bot):
 
 def run() -> None:
     """Bot entry point."""
+    from collector.dave_patch import apply_dave_patch
+    apply_dave_patch()
     config = load_config()
     bot = VoiceBot(config)
     logger.info("Starting voice recording bot...")
