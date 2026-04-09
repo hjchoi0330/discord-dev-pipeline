@@ -106,12 +106,12 @@ class TestPipelineRun:
     def test_get_stage(self):
         run = PipelineRun.create("2026-03-01")
         collect = run.get_stage(STAGE_COLLECT)
-        assert collect is not None
         assert collect.name == "collect"
 
-    def test_get_stage_returns_none_for_unknown(self):
+    def test_get_stage_raises_key_error_for_unknown(self):
         run = PipelineRun.create("2026-03-01")
-        assert run.get_stage("nonexistent") is None
+        with pytest.raises(KeyError):
+            run.get_stage("nonexistent")
 
     def test_all_stages_present(self):
         run = PipelineRun.create("2026-03-01")

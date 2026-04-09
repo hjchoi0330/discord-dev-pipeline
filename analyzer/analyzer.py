@@ -107,7 +107,7 @@ _MAX_CHARS_PER_CHUNK = 8000
 def _load_conversation_file(path: Path) -> dict:
     """Load a conversation file as JSON. Returns an empty dict if file is missing or parsing fails."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             data = json.load(f)
             if not isinstance(data, dict):
                 logger.warning("Conversation file is not a dict: %s", path)
@@ -156,16 +156,42 @@ def _chunk_messages(messages: list[dict]) -> list[list[dict]]:
 
 
 def _parse_claude_response(response_text: str) -> list[dict]:
-    """Parse JSON from a Claude response."""
-    # Extract only the JSON block (handle markdown code fences)
-    match = re.search(r"\{[\s\S]*\}", response_text)
-    if not match:
-        return []
+    """Parse JSON from a Claude response.
+
+    Attempts in order:
+    1. Parse the entire response as JSON directly.
+    2. Extract a markdown ```json ... ``` code fence and parse its contents.
+    3. Fall back to scanning for JSON objects at each '{' using raw_decode.
+    """
+    # 1) Try the whole response first (handles clean JSON replies)
     try:
-        data = json.loads(match.group())
+        data = json.loads(response_text.strip())
         return data.get("dev_topics", [])
     except json.JSONDecodeError:
-        return []
+        pass
+
+    # 2) Look for a markdown code fence (```json ... ``` or ``` ... ```)
+    fence_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", response_text)
+    if fence_match:
+        try:
+            data = json.loads(fence_match.group(1))
+            return data.get("dev_topics", [])
+        except json.JSONDecodeError:
+            pass
+
+    # 3) Scan for JSON objects at each '{' position using raw_decode
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(response_text):
+        if ch != "{":
+            continue
+        try:
+            data, _ = decoder.raw_decode(response_text, i)
+            if isinstance(data, dict):
+                return data.get("dev_topics", [])
+        except json.JSONDecodeError:
+            continue
+
+    return []
 
 
 def _deduplicate_topics(topics: list[DevTopic]) -> list[DevTopic]:
@@ -264,7 +290,7 @@ def analyze_conversations(files: list[Path], date: str, data_dir: Path | None = 
             return obj.__dict__
         return str(obj)
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    with output_path.open("w", encoding="utf-8") as f:
         json.dump(result.__dict__, f, ensure_ascii=False, indent=2, default=_serialize)
 
     logger.info("Analysis complete: %d topic(s) found -> %s", len(unique_topics), output_path)

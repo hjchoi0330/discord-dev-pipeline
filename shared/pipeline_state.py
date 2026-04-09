@@ -99,12 +99,16 @@ class PipelineRun:
             config=config or {},
         )
 
-    def get_stage(self, name: str) -> StageRecord | None:
-        """Look up a stage record by name."""
+    def get_stage(self, name: str) -> StageRecord:
+        """Look up a stage record by name.
+
+        Raises:
+            KeyError: If no stage with the given name exists.
+        """
         for stage in self.stages:
             if stage.name == name:
                 return stage
-        return None
+        raise KeyError(f"Stage {name!r} not found in pipeline run {self.run_id!r}")
 
     def finish(self) -> None:
         """Finalize the pipeline run and determine its terminal status."""

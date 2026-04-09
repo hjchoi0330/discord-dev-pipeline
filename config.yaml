@@ -1,13 +1,13 @@
 discord:
   # Bot token (use DISCORD_BOT_TOKEN env var instead of hardcoding)
-  token: ""
+  token: ""  # Set via DISCORD_BOT_TOKEN env var (never commit real tokens here)
 
 collector:
   # Data storage directory (default: data/conversations, overridable via DATA_DIR env var)
   data_dir: "data/conversations"
 
   # Whisper speech transcription settings
-  whisper_model: "small"       # tiny | base | small | medium | large-v3
+  whisper_model: "medium"       # tiny | base | small | medium | large-v3
   whisper_language: "ko"       # transcription language (ko, en, ja, zh ...)
   whisper_device: "cpu"        # cpu | cuda (GPU acceleration)
   whisper_compute_type: "int8" # int8 | float16 | float32
@@ -18,16 +18,22 @@ collector:
   # Bot pipeline execution mode
   #   "full" = analyze -> plan -> execute (full pipeline)
   #   "plan" = analyze -> plan only (skips execution, for manual review)
-  pipeline_mode: "full"
+  pipeline_mode: "plan"
 
   # Voice channel filter (empty list = all channels)
   monitored_voice_channels: []
   ignored_voice_channels:
     - "AFK"
 
+bot:
+  pipeline_timeout_seconds: 600  # max time for pipeline subprocess (should be > planner timeout)
+
 pipeline:
   data_dir: "data"
   auto_execute: false  # if true, auto-run Claude Code on new plans
+
+planner:
+  timeout_seconds: 600  # 10 minutes — plan generation can take longer due to complex prompts
 
 executor:
   claude_cli_path: "claude"  # path to claude CLI binary

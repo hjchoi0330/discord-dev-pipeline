@@ -110,6 +110,17 @@ class TestParseClaudeResponse:
         response = '{"other_key": "value"}'
         assert _parse_claude_response(response) == []
 
+    def test_multiple_json_blocks_uses_first_valid(self):
+        """When response contains multiple JSON-like blocks, the first parseable one with dev_topics wins."""
+        response = (
+            'Some preamble {"broken": } garbage '
+            '{"dev_topics": [{"title": "Real topic"}]} '
+            '{"dev_topics": [{"title": "Second block"}]}'
+        )
+        topics = _parse_claude_response(response)
+        assert len(topics) == 1
+        assert topics[0]["title"] == "Real topic"
+
 
 # ── _deduplicate_topics ──────────────────────────────────────────────
 

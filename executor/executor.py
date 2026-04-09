@@ -79,7 +79,14 @@ def _extract_project_dir(
     # 1) Use the explicit path if present in the plan body
     match = re.search(r"data/result/([\w-]+)", plan_text)
     if match:
-        return result_dir / match.group(1)
+        candidate = result_dir / match.group(1)
+        if not candidate.resolve().is_relative_to(result_dir.resolve()):
+            logger.warning(
+                "Extracted project_dir %s escapes result_dir; falling back to default-project.",
+                candidate,
+            )
+            return result_dir / "default-project"
+        return candidate
 
     # 2) Extract topic keywords from the plan filename
     topic_name = ""
@@ -118,7 +125,14 @@ def _extract_project_dir(
     if topic_name:
         safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", topic_name).strip("-")
         if safe_name:
-            return result_dir / safe_name
+            candidate = result_dir / safe_name
+            if not candidate.resolve().is_relative_to(result_dir.resolve()):
+                logger.warning(
+                    "Derived project_dir %s escapes result_dir; falling back to default-project.",
+                    candidate,
+                )
+                return result_dir / "default-project"
+            return candidate
 
     return result_dir / "default-project"
 

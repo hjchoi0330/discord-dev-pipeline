@@ -90,6 +90,9 @@ IMPORTANT:
 - Even if the Discord discussion was in Korean or another language, translate everything into clear English.
 - The "Claude Code Prompt" section MUST contain a complete, standalone prompt
   that starts with "Implement" and includes all context needed for implementation.
+- Output ONLY the plan content as plain text. Do NOT attempt to write or save any files.
+  Do NOT include meta-commentary about file permissions, approvals, or save locations.
+  Your stdout is captured and saved automatically by the pipeline.
 """
 
 
@@ -141,6 +144,7 @@ def _mark_topic_planned(
 
 def generate_plans(
     analysis: AnalysisResult, output_dir: Path, *, data_dir: Path | None = None,
+    timeout_seconds: int = 120,
 ) -> list[Path]:
     """Generate markdown plan files from analyzed dev topics.
 
@@ -191,7 +195,7 @@ def generate_plans(
         )
 
         try:
-            plan_content = _call_claude(prompt)
+            plan_content = _call_claude(prompt, timeout=timeout_seconds)
         except Exception as e:
             logger.error("Failed to generate plan (topic: %s): %s", topic.title, e)
             continue

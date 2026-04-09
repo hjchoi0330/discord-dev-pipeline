@@ -39,23 +39,7 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path("config.yaml")
 
-
-def _resolve_data_dir() -> Path:
-    """Resolve the data directory from DATA_DIR env var or config.yaml.
-
-    Priority: DATA_DIR env var > config.yaml pipeline.data_dir > "data"
-    """
-    env_val = os.environ.get("DATA_DIR")
-    if env_val:
-        return Path(env_val)
-    if _CONFIG_PATH.exists():
-        with _CONFIG_PATH.open(encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        cfg_val = cfg.get("pipeline", {}).get("data_dir")
-        if cfg_val:
-            return Path(cfg_val)
-    return Path("data")
-
+from shared.config import resolve_data_dir as _resolve_data_dir  # noqa: E402
 
 _DATA_DIR = _resolve_data_dir()
 
@@ -81,6 +65,22 @@ def _find_conversation_files(date: str) -> list[Path]:
     files = set(conv_dir.glob(f"{date}_*.json"))
     files |= set(conv_dir.glob(f"{prev_date}_*.json"))
     return sorted(files)
+
+
+def _save_analysis(analysis, date: str, data_dir: Path) -> None:
+    """Persist an AnalysisResult to the analysis JSON file."""
+    analysis_dir = data_dir / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    output_path = analysis_dir / f"{date}_analysis.json"
+
+    def _serialize(obj):
+        if hasattr(obj, "__dict__"):
+            return obj.__dict__
+        return str(obj)
+
+    with output_path.open("w", encoding="utf-8") as f:
+        _json.dump(analysis.__dict__, f, ensure_ascii=False, indent=2, default=_serialize)
+    logger.info("Merged analysis saved: %s", output_path)
 
 
 def _load_existing_analysis(date: str):
@@ -172,6 +172,7 @@ def run_pipeline(
 
     config = _load_config()
     pipeline_cfg = config.get("pipeline", {})
+    planner_cfg = config.get("planner", {})
     executor_cfg = config.get("executor", {})
 
     if date is None:
@@ -217,20 +218,46 @@ def run_pipeline(
                         new_files.append(f)
 
                 if not new_files:
+                    # All files already analyzed — use cached
                     logger.info("All conversation files have already been analyzed. Using cached analysis.")
                     analysis = _load_existing_analysis(date)
                     if analysis:
-                        analyze_stage.complete({
-                            "source": "cached",
-                            "topics_found": analysis.dev_topics_found,
-                        })
+                        analyze_stage.complete({"source": "cached", "topics_found": analysis.dev_topics_found})
                     else:
                         analyze_stage.fail("Failed to load cached analysis file")
                 else:
                     skipped = len(conv_files) - len(new_files)
                     if skipped > 0:
                         logger.info("Skipping %d already-analyzed file(s), %d new file(s) to analyze", skipped, len(new_files))
-                    conv_files = new_files
+
+                    # Analyze new files
+                    fresh_analysis = analyze_conversations(new_files, date, data_dir=_DATA_DIR)
+
+                    # Merge with cached analysis if some files were skipped
+                    cached = _load_existing_analysis(date)
+                    if cached and skipped > 0:
+                        from analyzer.analyzer import _deduplicate_topics
+                        merged_topics = _deduplicate_topics(cached.dev_topics + fresh_analysis.dev_topics)
+                        fresh_analysis.dev_topics = merged_topics
+                        fresh_analysis.dev_topics_found = len(merged_topics)
+                        fresh_analysis.source_files = list(set(cached.source_files + fresh_analysis.source_files))
+                        fresh_analysis.total_messages_analyzed = cached.total_messages_analyzed + fresh_analysis.total_messages_analyzed
+                        logger.info("Merged %d cached + %d fresh topics -> %d unique topics",
+                                    len(cached.dev_topics), len(fresh_analysis.dev_topics) - len(cached.dev_topics),
+                                    len(merged_topics))
+
+                        # Persist merged result so subsequent runs see the full picture
+                        try:
+                            _save_analysis(fresh_analysis, date, _DATA_DIR)
+                        except (ValueError, TypeError, OSError) as exc:
+                            logger.warning("Failed to persist merged analysis: %s", exc)
+
+                    analysis = fresh_analysis
+                    analyze_stage.complete({
+                        "source": "merged" if cached and skipped > 0 else "fresh",
+                        "topics_found": analysis.dev_topics_found,
+                        "messages_analyzed": analysis.total_messages_analyzed,
+                    })
 
         if analysis is None and analyze_stage.status != "failed":
             logger.info("Conversation files to analyze: %d", len(conv_files))
@@ -261,7 +288,10 @@ def run_pipeline(
         plan_stage.start({"actionable_topics": sum(1 for t in analysis.dev_topics if t.actionable)})
 
         plan_dir = _DATA_DIR / "plans"
-        plan_files = generate_plans(analysis, plan_dir, data_dir=_DATA_DIR)
+        plan_files = generate_plans(
+            analysis, plan_dir, data_dir=_DATA_DIR,
+            timeout_seconds=planner_cfg.get("timeout_seconds", 120),
+        )
 
         plan_stage.complete({
             "plans_generated": len(plan_files),
