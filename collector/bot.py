@@ -17,15 +17,32 @@ from typing import Any
 import discord
 from discord.ext import commands
 
-# Load libopus from macOS Homebrew (required for voice decoding)
+# Load libopus with cross-platform fallback paths
 if not discord.opus.is_loaded():
-    try:
-        discord.opus.load_opus("/opt/homebrew/lib/libopus.dylib")
-    except OSError:
-        pass  # On other OS, auto-loaded from system default path
+    import sys
+    _opus_paths = [
+        "/opt/homebrew/lib/libopus.dylib",       # macOS Homebrew (Apple Silicon)
+        "/usr/local/lib/libopus.dylib",           # macOS Homebrew (Intel)
+        "/usr/lib/x86_64-linux-gnu/libopus.so.0", # Debian/Ubuntu
+        "/usr/lib/libopus.so.0",                  # Arch/generic Linux
+    ]
+    for _opus_path in _opus_paths:
+        try:
+            discord.opus.load_opus(_opus_path)
+            break
+        except OSError:
+            continue
+    if not discord.opus.is_loaded():
+        logging.getLogger(__name__).warning(
+            "libopus not found. Voice recording will not work. "
+            "Install libopus (brew install opus / apt install libopus0)."
+        )
 
 from collector.config import CollectorConfig, load_config
+from collector.management import ManagementCog
 from shared.claude_cli import clean_env as _clean_claude_env
+from shared.config import resolve_data_dir as _resolve_data_dir
+from shared.embeds import pipeline_result_embed, plan_embed, COLOR_SUCCESS, COLOR_FAILURE, COLOR_INFO
 
 _LOG_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
@@ -43,6 +60,7 @@ logging.basicConfig(
     force=True,  # Override pipeline.py's basicConfig when imported via --bot
 )
 logger = logging.getLogger(__name__)
+
 
 _file_locks: dict[str, threading.Lock] = {}
 _locks_mutex = threading.Lock()
@@ -144,7 +162,7 @@ def _save_transcription(
                     existing = json.load(f)
                     existing_messages = existing.get("messages", [])
             except (json.JSONDecodeError, OSError):
-                pass
+                logger.warning("Corrupt transcription file %s — previous data will be lost.", path)
 
         data = {
             "date": date_str,
@@ -170,6 +188,20 @@ class VoiceCog(commands.Cog):
         self.config = config
         # guild_id → RecordingSession
         self._sessions: dict[int, RecordingSession] = {}
+        self._pipeline_lock = asyncio.Lock()
+        self._pipeline_timeout = self._load_pipeline_timeout()
+
+    def _load_pipeline_timeout(self) -> int:
+        config_path = Path(__file__).parent.parent / "config.yaml"
+        if config_path.exists():
+            try:
+                import yaml
+                with config_path.open() as f:
+                    cfg = yaml.safe_load(f) or {}
+                return cfg.get("bot", {}).get("pipeline_timeout_seconds", 600)
+            except Exception:
+                pass
+        return 600
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
@@ -199,6 +231,14 @@ class VoiceCog(commands.Cog):
             target_channel = ctx.author.voice.channel  # type: ignore[assignment]
         else:
             await ctx.send("Please specify a channel name or join a voice channel first.")
+            return
+
+        # Check channel filters
+        if self.config.monitored_voice_channels and target_channel.name not in self.config.monitored_voice_channels:
+            await ctx.send(f"Channel '{target_channel.name}' is not in the monitored list.")
+            return
+        if target_channel.name in self.config.ignored_voice_channels:
+            await ctx.send(f"Channel '{target_channel.name}' is in the ignored list.")
             return
 
         guild_id = ctx.guild.id
@@ -295,7 +335,7 @@ class VoiceCog(commands.Cog):
                      f"from pipeline import run_pipeline; run_pipeline(auto_execute={ae_flag})"],
                     capture_output=True,
                     text=True,
-                    timeout=600,
+                    timeout=self._pipeline_timeout,
                     cwd=str(Path(__file__).parent.parent),
                     env=env,
                 ),
@@ -328,7 +368,7 @@ class VoiceCog(commands.Cog):
                 error_excerpt = result.stderr[-1500:] if result.stderr else "Unknown error"
                 return False, f"Pipeline error (code {result.returncode}):\n```\n{error_excerpt}\n```"
         except subprocess.TimeoutExpired:
-            return False, "Pipeline timed out (10 minutes)."
+            return False, f"Pipeline timed out ({self._pipeline_timeout} seconds)."
         except Exception as exc:
             logger.exception("Pipeline execution failed")
             return False, f"Execution failed: {exc}"
@@ -348,6 +388,49 @@ class VoiceCog(commands.Cog):
         if override in self._VALID_PIPELINE_MODES:
             return override
         return self.config.pipeline_mode if self.config.pipeline_mode in self._VALID_PIPELINE_MODES else "full"
+
+    async def _run_pipeline_and_report(
+        self, channel: discord.TextChannel, auto_execute: bool,
+    ) -> None:
+        """Run the pipeline subprocess and report results to the channel."""
+        if self._pipeline_lock.locked():
+            await channel.send("Pipeline is already running. Please wait.")
+            return
+        async with self._pipeline_lock:
+            resolved_mode = "full" if auto_execute else "plan"
+
+            plans_dir = Path(__file__).parent.parent / "data" / "plans"
+            existing = set(plans_dir.glob("*.md")) if plans_dir.exists() else set()
+
+            success, message = await self._run_pipeline_subprocess(auto_execute=auto_execute)
+            logger.info("Pipeline finished: success=%s, mode=%s", success, resolved_mode)
+            if message:
+                await channel.send(message)
+
+            if success:
+                new_plans = sorted((set(plans_dir.glob("*.md")) if plans_dir.exists() else set()) - existing)
+                logger.info("New plans detected: %d", len(new_plans))
+                await self._post_plans_to_channel(channel, new_plans)
+
+                mode_label = "plan + execute" if auto_execute else "plan only"
+                embed = discord.Embed(
+                    title="\u2705 Pipeline Complete",
+                    description=f"Mode: **{mode_label}**",
+                    color=COLOR_SUCCESS,
+                )
+                if new_plans:
+                    embed.add_field(name="New Plans", value=str(len(new_plans)), inline=True)
+                    if not auto_execute:
+                        embed.set_footer(text="Use !pipeline full to execute the plans")
+                else:
+                    embed.add_field(name="New Plans", value="0 (no new plans)", inline=True)
+                await channel.send(embed=embed)
+            else:
+                embed = discord.Embed(
+                    title="\u274C Pipeline Failed",
+                    color=COLOR_FAILURE,
+                )
+                await channel.send(embed=embed)
 
     @commands.command(name="pipeline")
     async def pipeline_command(self, ctx: commands.Context, *, mode: str = "") -> None:
@@ -385,30 +468,7 @@ class VoiceCog(commands.Cog):
         mode_label = "full (plan + execute)" if auto_execute else "plan generation only"
         await ctx.send(f"Starting pipeline... (mode: **{mode_label}**)")
 
-        plans_dir = Path(__file__).parent.parent / "data" / "plans"
-        existing = set(plans_dir.glob("*.md")) if plans_dir.exists() else set()
-
-        success, message = await self._run_pipeline_subprocess(auto_execute=auto_execute)
-        logger.info("Pipeline finished: success=%s, mode=%s", success, resolved_mode)
-        if message:
-            await ctx.send(message)
-
-        if success:
-            new_plans = sorted((set(plans_dir.glob("*.md")) if plans_dir.exists() else set()) - existing)
-            logger.info("New plans detected: %d", len(new_plans))
-            await self._post_plans_to_channel(ctx.channel, new_plans)
-
-            if auto_execute:
-                await ctx.send("✅ Pipeline complete! (plan generation + execution)")
-            elif new_plans:
-                await ctx.send(
-                    "✅ Plan generation complete!\n"
-                    "Use `!pipeline full` to execute the plans."
-                )
-            else:
-                await ctx.send("✅ Pipeline complete! (no new plans)")
-        else:
-            await ctx.send("❌ Pipeline failed.")
+        await self._run_pipeline_and_report(ctx.channel, auto_execute)
 
     # ── Plan posting ────────────────────────────────────────────────
 
@@ -417,38 +477,19 @@ class VoiceCog(commands.Cog):
         channel: discord.TextChannel,
         plan_files: list[Path],
     ) -> None:
-        """Post generated plan summaries to the Discord channel."""
+        """Post generated plan summaries to the Discord channel as embeds."""
         if not plan_files:
             return
 
-        await channel.send(f"📋 **{len(plan_files)} plan(s) generated:**")
+        header = discord.Embed(
+            title=f"\U0001F4CB {len(plan_files)} plan(s) generated",
+            color=COLOR_INFO,
+        )
+        await channel.send(embed=header)
 
         for plan_file in plan_files:
-            try:
-                content = plan_file.read_text(encoding="utf-8")
-            except OSError:
-                continue
-
-            # Extract title
-            title_match = re.search(r"^# Plan:\s*(.+)$", content, re.MULTILINE)
-            title = title_match.group(1).strip() if title_match else plan_file.stem
-
-            # Extract objective
-            obj_match = re.search(
-                r"## Objective\n(.+?)(?=\n##|\Z)", content, re.DOTALL
-            )
-            objective = obj_match.group(1).strip()[:300] if obj_match else ""
-
-            msg = f"**• {title}**"
-            if objective:
-                msg += f"\n> {objective}"
-            msg += f"\n📁 `{plan_file.name}`"
-
-            # Discord message limit is 2000 chars
-            if len(msg) > 1900:
-                msg = msg[:1900] + "..."
-
-            await channel.send(msg)
+            embed = plan_embed(plan_file, executed=False)
+            await channel.send(embed=embed)
 
     # ── Internal callbacks ────────────────────────────────────────────────────
 
@@ -551,30 +592,7 @@ class VoiceCog(commands.Cog):
             auto_execute = resolved_mode == "full"
             mode_label = "full (plan + execute)" if auto_execute else "plan generation only"
             await text_channel.send(f"Running pipeline automatically... (mode: **{mode_label}**)")
-
-            plans_dir = Path(__file__).parent.parent / "data" / "plans"
-            existing = set(plans_dir.glob("*.md")) if plans_dir.exists() else set()
-
-            success, message = await self._run_pipeline_subprocess(auto_execute=auto_execute)
-            if message:
-                await text_channel.send(message)
-
-            if success:
-                new_plans = sorted(
-                    (set(plans_dir.glob("*.md")) if plans_dir.exists() else set()) - existing
-                )
-                await self._post_plans_to_channel(text_channel, new_plans)
-                if auto_execute:
-                    await text_channel.send("✅ Pipeline complete! (plan generation + execution)")
-                elif new_plans:
-                    await text_channel.send(
-                        "✅ Plan generation complete!\n"
-                        "Use `!pipeline full` to execute the plans."
-                    )
-                else:
-                    await text_channel.send("✅ Pipeline complete! (no new plans)")
-            else:
-                await text_channel.send("❌ Pipeline failed.")
+            await self._run_pipeline_and_report(text_channel, auto_execute)
         else:
             await text_channel.send(
                 "Use `!pipeline` to analyze/generate development plans."
@@ -585,9 +603,13 @@ class VoiceBot(commands.Bot):
     """Minimal Bot class — responsible only for registering Cogs."""
 
     def __init__(self, config: CollectorConfig) -> None:
-        intents = discord.Intents.all()
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.voice_states = True
+        intents.members = True
         super().__init__(command_prefix="!", intents=intents)
         self.add_cog(VoiceCog(self, config))
+        self.add_cog(ManagementCog(self, data_dir=_resolve_data_dir()))
 
 
 def run() -> None:
