@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -256,7 +257,7 @@ def analyze_conversations(files: list[Path], date: str, data_dir: Path | None = 
                 ]
                 all_topics.append(
                     DevTopic(
-                        id=f"topic_{topic_counter:03d}",
+                        id=f"{date}_{hashlib.sha256(raw.get('title', '').encode()).hexdigest()[:8]}",
                         title=raw.get("title", "Untitled"),
                         category=raw.get("category", "discussion"),
                         priority=raw.get("priority", "medium"),
